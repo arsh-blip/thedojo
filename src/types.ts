@@ -85,3 +85,25 @@ export interface ConceptSlideData {
   target_audience: string;
   key_messaging_points: string[];
 }
+
+// ── Video Ad Analysis Types ────────────────────────────────────────
+
+export interface VideoAdEntry {
+  filename: string;
+  file_path: string;
+  file_size_bytes: number;
+  duration_seconds: number;
+  resolution: { width: number; height: number };
+  aspect_ratio: string;
+  transcript: string | null;
+  key_frame_paths: string[];
+  analyzed_at: string;
+}
+
+export interface VideoAdCatalog {
+  brand: string;
+  created_at: string;
+  updated_at: string;
+  source_folder: string;
+  videos: VideoAdEntry[];
+}

@@ -1,15 +1,19 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import path from "node:path";
 import { MetaAdLibraryService } from "./services/meta-ad-library.js";
 import { GoogleDriveService } from "./services/google-drive.js";
 import { GoogleSlidesService } from "./services/google-slides.js";
+import { VideoAnalyzerService } from "./services/video-analyzer.js";
+import { AdCatalogService } from "./services/ad-catalog.js";
 import { createOAuth2Client } from "./services/google-auth.js";
 import type {
   FacebookAd,
   AdCopy,
   AngleRecommendation,
   ConceptSlideData,
+  VideoAdCatalog,
 } from "./types.js";
 
 // ── Initialize services ─────────────────────────────────────────────
@@ -27,6 +31,14 @@ function getGoogleDriveService(): GoogleDriveService {
 function getGoogleSlidesService(): GoogleSlidesService {
   return new GoogleSlidesService(createOAuth2Client());
 }
+
+function getVideoAnalyzerService(): VideoAnalyzerService {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error("OPENAI_API_KEY is not set");
+  return new VideoAnalyzerService(key);
+}
+
+const adCatalog = new AdCatalogService();
 
 // ── MCP Server ──────────────────────────────────────────────────────
 
@@ -552,6 +564,264 @@ or seeing the current state of a concept deck before updating it.`,
         {
           type: "text" as const,
           text: `## Slides in Presentation\n\n${formatted}\n\nUse the slide ID with the \`update_concept_slides\` tool to populate a template.`,
+        },
+      ],
+    };
+  }
+);
+
+// ── Tool 7: Analyze Video Ads ────────────────────────────────────────
+
+server.tool(
+  "analyze_video_ads",
+  `Bulk-analyze a folder of video ads. Extracts key frames, metadata, and audio transcripts
+(via OpenAI Whisper) for every video in the folder. Results are saved to a JSON catalog file
+that can be queried with query_ad_catalog.
+
+Requires ffmpeg and ffprobe to be installed on the system.
+Supports incremental processing — already-analyzed videos are skipped by default.`,
+  {
+    folder_path: z
+      .string()
+      .describe(
+        "Absolute path to the folder containing video files (mp4, mov, avi, webm, mkv, m4v)"
+      ),
+    brand_name: z
+      .string()
+      .describe("Brand name for cataloging (e.g. 'Glossier')"),
+    catalog_path: z
+      .string()
+      .optional()
+      .describe(
+        "Custom path for the catalog JSON file. Defaults to {folder_path}/ad_catalog.json"
+      ),
+    frame_interval_seconds: z
+      .number()
+      .min(1)
+      .max(30)
+      .default(5)
+      .describe(
+        "Extract one frame every N seconds (default: 5). Lower = more frames."
+      ),
+    max_frames_per_video: z
+      .number()
+      .min(1)
+      .max(30)
+      .default(10)
+      .describe("Maximum number of key frames to extract per video (default: 10)"),
+    max_videos: z
+      .number()
+      .min(1)
+      .optional()
+      .describe(
+        "Process at most N videos (useful for batching large folders). Omit to process all."
+      ),
+    skip_existing: z
+      .boolean()
+      .default(true)
+      .describe("Skip videos that are already in the catalog (default: true)"),
+  },
+  async ({
+    folder_path,
+    brand_name,
+    catalog_path,
+    frame_interval_seconds,
+    max_frames_per_video,
+    max_videos,
+    skip_existing,
+  }) => {
+    const analyzer = getVideoAnalyzerService();
+    const catPath = catalog_path ?? path.join(folder_path, "ad_catalog.json");
+    const framesDir = path.join(folder_path, "_frames");
+
+    // Load existing catalog or create new one
+    let catalog = await adCatalog.load(catPath);
+    const isNew = !catalog;
+    if (!catalog) {
+      catalog = {
+        brand: brand_name,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        source_folder: folder_path,
+        videos: [],
+      };
+    }
+
+    // List all videos in the folder
+    let allVideos: string[];
+    try {
+      allVideos = await analyzer.listVideos(folder_path);
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Error reading folder "${folder_path}": ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+      };
+    }
+
+    if (allVideos.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `No video files found in "${folder_path}". Supported formats: mp4, mov, avi, webm, mkv, m4v.`,
+          },
+        ],
+      };
+    }
+
+    // Filter out already-analyzed videos if requested
+    const analyzed = skip_existing
+      ? adCatalog.getAnalyzedFilenames(catalog)
+      : new Set<string>();
+    let toProcess = allVideos.filter(
+      (v) => !analyzed.has(path.basename(v))
+    );
+
+    if (max_videos) {
+      toProcess = toProcess.slice(0, max_videos);
+    }
+
+    if (toProcess.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `All ${allVideos.length} videos in "${folder_path}" have already been analyzed.\n\n${adCatalog.summarize(catalog)}`,
+          },
+        ],
+      };
+    }
+
+    // Process videos sequentially
+    const errors: string[] = [];
+    let processed = 0;
+
+    for (const videoPath of toProcess) {
+      try {
+        const entry = await analyzer.analyzeVideo(videoPath, framesDir, {
+          frameIntervalSeconds: frame_interval_seconds,
+          maxFramesPerVideo: max_frames_per_video,
+        });
+        catalog.videos.push(entry);
+        processed++;
+      } catch (err) {
+        errors.push(
+          `${path.basename(videoPath)}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
+    // Save catalog
+    catalog.updated_at = new Date().toISOString();
+    await adCatalog.save(catPath, catalog);
+
+    // Build response
+    const summary = adCatalog.summarize(catalog);
+    const errorReport =
+      errors.length > 0
+        ? `\n\n### Errors (${errors.length})\n${errors.map((e) => `- ${e}`).join("\n")}`
+        : "";
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Processed ${processed}/${toProcess.length} videos (${allVideos.length} total in folder).${isNew ? " New catalog created." : " Catalog updated."}\n\nCatalog saved to: ${catPath}\nKey frames saved to: ${framesDir}\n\n${summary}${errorReport}`,
+        },
+      ],
+    };
+  }
+);
+
+// ── Tool 8: Query Ad Catalog ────────────────────────────────────────
+
+server.tool(
+  "query_ad_catalog",
+  `Search and filter the analyzed video ad catalog. Use this after running analyze_video_ads
+to find specific ads by transcript content, duration, aspect ratio, or filename.
+Returns metadata, transcripts, and key frame paths for matching ads.`,
+  {
+    catalog_path: z
+      .string()
+      .describe("Path to the ad_catalog.json file"),
+    search_text: z
+      .string()
+      .optional()
+      .describe(
+        "Search transcripts and filenames for this text (case-insensitive)"
+      ),
+    min_duration: z
+      .number()
+      .optional()
+      .describe("Minimum video duration in seconds"),
+    max_duration: z
+      .number()
+      .optional()
+      .describe("Maximum video duration in seconds"),
+    aspect_ratio: z
+      .enum(["16:9", "9:16", "4:5", "1:1"])
+      .optional()
+      .describe("Filter by aspect ratio"),
+    limit: z
+      .number()
+      .min(1)
+      .max(50)
+      .default(10)
+      .describe("Maximum number of results to return (default: 10)"),
+  },
+  async ({ catalog_path, search_text, min_duration, max_duration, aspect_ratio, limit }) => {
+    const catalog = await adCatalog.load(catalog_path);
+
+    if (!catalog) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `No catalog found at "${catalog_path}". Run analyze_video_ads first to create one.`,
+          },
+        ],
+      };
+    }
+
+    const results = adCatalog.search(catalog, {
+      search_text,
+      min_duration,
+      max_duration,
+      aspect_ratio,
+      limit,
+    });
+
+    if (results.length === 0) {
+      const filters = [
+        search_text ? `text="${search_text}"` : null,
+        min_duration !== undefined ? `min_duration=${min_duration}s` : null,
+        max_duration !== undefined ? `max_duration=${max_duration}s` : null,
+        aspect_ratio ? `aspect_ratio=${aspect_ratio}` : null,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `No videos found matching filters: ${filters}.\n\n${adCatalog.summarize(catalog)}`,
+          },
+        ],
+      };
+    }
+
+    const formatted = results.map((r) => adCatalog.formatEntry(r));
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Found ${results.length} matching video(s) from ${catalog.brand} catalog (${catalog.videos.length} total):\n\n${formatted.join("\n\n---\n\n")}`,
         },
       ],
     };

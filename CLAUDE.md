@@ -23,12 +23,17 @@ Add to your Claude settings (`~/.claude/settings.json` or project `.mcp.json`):
         "META_ACCESS_TOKEN": "your_token",
         "GOOGLE_CLIENT_ID": "your_id",
         "GOOGLE_CLIENT_SECRET": "your_secret",
-        "GOOGLE_REFRESH_TOKEN": "your_token"
+        "GOOGLE_REFRESH_TOKEN": "your_token",
+        "OPENAI_API_KEY": "your_openai_key"
       }
     }
   }
 }
 ```
+
+### System Requirements
+
+- **ffmpeg** and **ffprobe** must be installed for video ad analysis (`analyze_video_ads`)
 
 ## Creative Strategist Workflow
 
@@ -58,6 +63,26 @@ Supports both template-based population (placeholder replacement) and new slide 
 ### Helper: List Slides
 Use `list_slides` to see all slides in a presentation before updating.
 
+## Video Ad Analysis Workflow
+
+For brands with existing winning video ads, use this workflow to catalog and analyze them
+before building new concepts.
+
+### Step 1: Analyze Video Ads
+Use `analyze_video_ads` with the folder path containing your video files and the brand name.
+This extracts key frames, metadata (duration, aspect ratio, resolution), and transcribes
+the audio from every video using OpenAI Whisper.
+Example: "Analyze all the video ads in /path/to/brand-videos for Glossier"
+
+### Step 2: Query the Catalog
+Use `query_ad_catalog` to search the analyzed catalog by transcript content, duration,
+aspect ratio, or filename. Use this to find patterns across winning ads.
+Example: "Find all 9:16 ads under 30 seconds that mention 'free shipping'"
+
+### Step 3: Use Insights in Creative Strategy
+Feed the transcripts and patterns from winning ads into `recommend_angles` and `write_ad_copy`
+to create new concepts grounded in what's already proven to work.
+
 ## Available Tools
 
 | Tool | Purpose |
@@ -68,3 +93,5 @@ Use `list_slides` to see all slides in a presentation before updating.
 | `write_ad_copy` | Generate ad copy variations |
 | `update_concept_slides` | Update Google Slides with concept |
 | `list_slides` | List slides in a presentation |
+| `analyze_video_ads` | Bulk-analyze a folder of video ads (frames, metadata, transcripts) |
+| `query_ad_catalog` | Search and filter the analyzed video ad catalog |
