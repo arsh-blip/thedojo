@@ -30,6 +30,26 @@ Add to your Claude settings (`~/.claude/settings.json` or project `.mcp.json`):
 }
 ```
 
+### Browser Use MCP Server
+
+Add the browser-use MCP server to your project `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "browser-use": {
+      "command": "uvx",
+      "args": ["browser-use[cli]", "--mcp"],
+      "env": {
+        "OPENAI_API_KEY": "your_openai_api_key"
+      }
+    }
+  }
+}
+```
+
+Requires `uvx` (from the `uv` Python package manager) and a valid OpenAI API key.
+
 ## Creative Strategist Workflow
 
 When working on a new Facebook ad concept, follow this workflow:
