@@ -6,6 +6,9 @@ export interface CatalogSearchParams {
   min_duration?: number;
   max_duration?: number;
   aspect_ratio?: string;
+  has_captions?: boolean;
+  caption_free_only?: boolean;
+  scene_type?: string;
   limit?: number;
 }
 
@@ -70,6 +73,27 @@ export class AdCatalogService {
       results = results.filter((v) => v.aspect_ratio === params.aspect_ratio);
     }
 
+    if (params.has_captions !== undefined) {
+      results = results.filter((v) => {
+        if (!v.frame_analyses) return false; // skip videos without visual analysis
+        const anyCaption = v.frame_analyses.some((f) => f.has_text_overlay);
+        return params.has_captions ? anyCaption : !anyCaption;
+      });
+    }
+
+    if (params.caption_free_only) {
+      results = results.filter(
+        (v) => v.caption_free_segments && v.caption_free_segments.length > 0
+      );
+    }
+
+    if (params.scene_type) {
+      results = results.filter((v) => {
+        if (!v.frame_analyses) return false;
+        return v.frame_analyses.some((f) => f.scene_type === params.scene_type);
+      });
+    }
+
     if (params.limit !== undefined && params.limit > 0) {
       results = results.slice(0, params.limit);
     }
@@ -96,6 +120,47 @@ export class AdCatalogService {
       lines.push(`- Transcript: "${preview}"`);
     } else {
       lines.push(`- Transcript: (no speech detected)`);
+    }
+
+    // Visual analysis details
+    if (entry.frame_analyses && entry.frame_analyses.length > 0) {
+      const withCaptions = entry.frame_analyses.filter(
+        (f) => f.has_text_overlay
+      ).length;
+      const sceneTypes = [
+        ...new Set(entry.frame_analyses.map((f) => f.scene_type)),
+      ];
+
+      lines.push(
+        `- Visual analysis: ${entry.frame_analyses.length} frames analyzed`
+      );
+      lines.push(
+        `- Text overlays: ${withCaptions}/${entry.frame_analyses.length} frames have captions`
+      );
+      lines.push(`- Scene types: ${sceneTypes.join(", ")}`);
+
+      // Frame-by-frame breakdown
+      for (const frame of entry.frame_analyses) {
+        const captionTag = frame.has_text_overlay
+          ? ` [CAPTION: "${frame.detected_text}"]`
+          : " [NO CAPTION]";
+        lines.push(
+          `  - @${frame.timestamp_seconds}s (${frame.scene_type}): ${frame.description}${captionTag}`
+        );
+      }
+    }
+
+    // Caption-free segments
+    if (entry.caption_free_segments && entry.caption_free_segments.length > 0) {
+      lines.push(`- Caption-free segments (clip-ready):`);
+      for (const seg of entry.caption_free_segments) {
+        const duration = Math.round(
+          (seg.end_seconds - seg.start_seconds) * 10
+        ) / 10;
+        lines.push(
+          `  - ${seg.start_seconds}s–${seg.end_seconds}s (${duration}s, ${seg.frame_count} frames): ${seg.description}`
+        );
+      }
     }
 
     return lines.join("\n");
@@ -126,7 +191,14 @@ export class AdCatalogService {
       .map(([ratio, count]) => `${ratio}: ${count}`)
       .join(", ");
 
-    return [
+    const withVisualAnalysis = catalog.videos.filter(
+      (v) => v.frame_analyses && v.frame_analyses.length > 0
+    ).length;
+    const withCaptionFreeSegs = catalog.videos.filter(
+      (v) => v.caption_free_segments && v.caption_free_segments.length > 0
+    ).length;
+
+    const summaryLines = [
       `## Ad Catalog: ${catalog.brand}`,
       `- **Videos:** ${catalog.videos.length}`,
       `- **Total size:** ${(totalSize / (1024 * 1024 * 1024)).toFixed(2)} GB`,
@@ -135,6 +207,17 @@ export class AdCatalogService {
       `- **Aspect ratios:** ${aspectBreakdown}`,
       `- **Source:** ${catalog.source_folder}`,
       `- **Last updated:** ${catalog.updated_at}`,
-    ].join("\n");
+    ];
+
+    if (withVisualAnalysis > 0) {
+      summaryLines.push(
+        `- **Visual analysis:** ${withVisualAnalysis}/${catalog.videos.length} videos`
+      );
+      summaryLines.push(
+        `- **With caption-free clips:** ${withCaptionFreeSegs}/${catalog.videos.length} videos`
+      );
+    }
+
+    return summaryLines.join("\n");
   }
 }

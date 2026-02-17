@@ -72,12 +72,25 @@ before building new concepts.
 Use `analyze_video_ads` with the folder path containing your video files and the brand name.
 This extracts key frames, metadata (duration, aspect ratio, resolution), and transcribes
 the audio from every video using OpenAI Whisper.
-Example: "Analyze all the video ads in /path/to/brand-videos for Glossier"
+
+Set `analyze_visuals: true` to also run GPT-4o vision on each frame. This detects:
+- **Text overlays / burned-in captions** on each frame
+- **Scene types** (product_shot, lifestyle, ugc_talking_head, text_card, etc.)
+- **Caption-free segments** — contiguous time ranges with no text overlays, ideal for clipping
+
+Example: "Analyze all the video ads in /path/to/brand-videos for Glossier with visual analysis enabled"
 
 ### Step 2: Query the Catalog
 Use `query_ad_catalog` to search the analyzed catalog by transcript content, duration,
 aspect ratio, or filename. Use this to find patterns across winning ads.
+
+With visual analysis, you can also filter by:
+- `has_captions: false` — find videos with no burned-in text
+- `caption_free_only: true` — find videos with clean clip-ready segments
+- `scene_type` — filter by visual scene type
+
 Example: "Find all 9:16 ads under 30 seconds that mention 'free shipping'"
+Example: "Find caption-free clips I can repurpose without text overlays"
 
 ### Step 3: Use Insights in Creative Strategy
 Feed the transcripts and patterns from winning ads into `recommend_angles` and `write_ad_copy`

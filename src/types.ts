@@ -88,6 +88,22 @@ export interface ConceptSlideData {
 
 // ── Video Ad Analysis Types ────────────────────────────────────────
 
+export interface FrameAnalysis {
+  frame_path: string;
+  timestamp_seconds: number;
+  description: string;
+  has_text_overlay: boolean;
+  detected_text: string | null;
+  scene_type: string;
+}
+
+export interface CaptionFreeSegment {
+  start_seconds: number;
+  end_seconds: number;
+  frame_count: number;
+  description: string;
+}
+
 export interface VideoAdEntry {
   filename: string;
   file_path: string;
@@ -97,6 +113,8 @@ export interface VideoAdEntry {
   aspect_ratio: string;
   transcript: string | null;
   key_frame_paths: string[];
+  frame_analyses: FrameAnalysis[] | null;
+  caption_free_segments: CaptionFreeSegment[] | null;
   analyzed_at: string;
 }
 

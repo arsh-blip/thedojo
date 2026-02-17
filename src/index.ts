@@ -578,6 +578,11 @@ server.tool(
 (via OpenAI Whisper) for every video in the folder. Results are saved to a JSON catalog file
 that can be queried with query_ad_catalog.
 
+When analyze_visuals is enabled, each extracted frame is analyzed with GPT-4o vision to:
+- Describe the visual content (product shots, lifestyle, UGC, etc.)
+- Detect burned-in captions, subtitles, and text overlays
+- Identify caption-free segments ideal for clipping and repurposing
+
 Requires ffmpeg and ffprobe to be installed on the system.
 Supports incremental processing — already-analyzed videos are skipped by default.`,
   {
@@ -620,6 +625,13 @@ Supports incremental processing — already-analyzed videos are skipped by defau
       .boolean()
       .default(true)
       .describe("Skip videos that are already in the catalog (default: true)"),
+    analyze_visuals: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Analyze each frame with GPT-4o vision to detect text overlays, captions, and scene types. " +
+        "Identifies caption-free segments ideal for clipping. Uses OpenAI API credits per frame (default: false)."
+      ),
   },
   async ({
     folder_path,
@@ -629,6 +641,7 @@ Supports incremental processing — already-analyzed videos are skipped by defau
     max_frames_per_video,
     max_videos,
     skip_existing,
+    analyze_visuals,
   }) => {
     const analyzer = getVideoAnalyzerService();
     const catPath = catalog_path ?? path.join(folder_path, "ad_catalog.json");
@@ -705,6 +718,7 @@ Supports incremental processing — already-analyzed videos are skipped by defau
         const entry = await analyzer.analyzeVideo(videoPath, framesDir, {
           frameIntervalSeconds: frame_interval_seconds,
           maxFramesPerVideo: max_frames_per_video,
+          analyzeVisuals: analyze_visuals,
         });
         catalog.videos.push(entry);
         processed++;
@@ -730,7 +744,7 @@ Supports incremental processing — already-analyzed videos are skipped by defau
       content: [
         {
           type: "text" as const,
-          text: `Processed ${processed}/${toProcess.length} videos (${allVideos.length} total in folder).${isNew ? " New catalog created." : " Catalog updated."}\n\nCatalog saved to: ${catPath}\nKey frames saved to: ${framesDir}\n\n${summary}${errorReport}`,
+          text: `Processed ${processed}/${toProcess.length} videos (${allVideos.length} total in folder).${isNew ? " New catalog created." : " Catalog updated."}${analyze_visuals ? " Visual analysis enabled (GPT-4o)." : ""}\n\nCatalog saved to: ${catPath}\nKey frames saved to: ${framesDir}\n\n${summary}${errorReport}`,
         },
       ],
     };
@@ -743,7 +757,12 @@ server.tool(
   "query_ad_catalog",
   `Search and filter the analyzed video ad catalog. Use this after running analyze_video_ads
 to find specific ads by transcript content, duration, aspect ratio, or filename.
-Returns metadata, transcripts, and key frame paths for matching ads.`,
+Returns metadata, transcripts, and key frame paths for matching ads.
+
+When visual analysis has been run (analyze_visuals=true), you can also filter by:
+- has_captions: find videos with or without burned-in text overlays
+- caption_free_only: find only videos that have caption-free segments (ideal for clipping)
+- scene_type: filter by visual scene type (product_shot, lifestyle, ugc_talking_head, etc.)`,
   {
     catalog_path: z
       .string()
@@ -766,6 +785,35 @@ Returns metadata, transcripts, and key frame paths for matching ads.`,
       .enum(["16:9", "9:16", "4:5", "1:1"])
       .optional()
       .describe("Filter by aspect ratio"),
+    has_captions: z
+      .boolean()
+      .optional()
+      .describe(
+        "Filter by caption presence. true = has text overlays, false = no text overlays. " +
+        "Requires analyze_visuals to have been run."
+      ),
+    caption_free_only: z
+      .boolean()
+      .optional()
+      .describe(
+        "If true, only return videos that have at least one caption-free segment " +
+        "(ideal for clipping without needing to hide text). Requires analyze_visuals."
+      ),
+    scene_type: z
+      .enum([
+        "product_shot",
+        "lifestyle",
+        "ugc_talking_head",
+        "text_card",
+        "logo_endcard",
+        "unboxing",
+        "before_after",
+        "testimonial",
+        "demo",
+        "other",
+      ])
+      .optional()
+      .describe("Filter by scene type detected in frame analysis"),
     limit: z
       .number()
       .min(1)
@@ -773,7 +821,7 @@ Returns metadata, transcripts, and key frame paths for matching ads.`,
       .default(10)
       .describe("Maximum number of results to return (default: 10)"),
   },
-  async ({ catalog_path, search_text, min_duration, max_duration, aspect_ratio, limit }) => {
+  async ({ catalog_path, search_text, min_duration, max_duration, aspect_ratio, has_captions, caption_free_only, scene_type, limit }) => {
     const catalog = await adCatalog.load(catalog_path);
 
     if (!catalog) {
@@ -792,6 +840,9 @@ Returns metadata, transcripts, and key frame paths for matching ads.`,
       min_duration,
       max_duration,
       aspect_ratio,
+      has_captions,
+      caption_free_only,
+      scene_type,
       limit,
     });
 
@@ -801,6 +852,9 @@ Returns metadata, transcripts, and key frame paths for matching ads.`,
         min_duration !== undefined ? `min_duration=${min_duration}s` : null,
         max_duration !== undefined ? `max_duration=${max_duration}s` : null,
         aspect_ratio ? `aspect_ratio=${aspect_ratio}` : null,
+        has_captions !== undefined ? `has_captions=${has_captions}` : null,
+        caption_free_only ? `caption_free_only=true` : null,
+        scene_type ? `scene_type=${scene_type}` : null,
       ]
         .filter(Boolean)
         .join(", ");
