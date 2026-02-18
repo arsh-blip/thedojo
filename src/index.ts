@@ -2381,6 +2381,385 @@ Accepts a mix of sources (URLs, Google Drive files, local paths).`,
   }
 );
 
+// ── Tool 18: Generate Ad Scripts ──────────────────────────────────────
+
+server.tool(
+  "generate_ad_scripts",
+  `Generate 3 punchy, high-converting video ad script variations based on a reference
+video analysis and a specified brand angle/pillar.
+
+Each script is formatted in a standard script outline table:
+Scene #, Duration, Visual Direction, Audio/Voiceover, On-Screen Text, Notes.
+
+Use after analyze_video to turn a creative teardown into production-ready scripts.
+Pass brand_slug to pull the full strategy pillar context (emotional fear, P>S>P,
+example hooks, audience persona) into the scripts.`,
+  {
+    video_id: z.string().describe("Video ID from ingest_video (the reference ad)"),
+    brand_slug: z.string().describe("Brand slug — loads strategy pillars, product, and mission"),
+    pillar_name: z
+      .string()
+      .describe(
+        "Angle or naming convention of the strategy pillar to target (e.g., 'RP-01: The Tractor Cab' or 'The Shame Remover')"
+      ),
+    video_analysis_summary: z
+      .string()
+      .describe("Claude's creative teardown from analyze_video — paste the full analysis"),
+    target_duration: z
+      .number()
+      .default(30)
+      .describe("Target video duration in seconds (default 30)"),
+    format: z
+      .enum(["UGC", "Studio", "Motion Graphics", "Testimonial", "Problem-Solution", "Mixed"])
+      .default("UGC")
+      .describe("Video ad format/style"),
+    additional_direction: z
+      .string()
+      .optional()
+      .describe("Any additional creative direction or constraints"),
+  },
+  async ({
+    video_id,
+    brand_slug,
+    pillar_name,
+    video_analysis_summary,
+    target_duration,
+    format,
+    additional_direction,
+  }) => {
+    const ctx = await brandStore.getFullContext(brand_slug);
+    if (!ctx) {
+      return {
+        content: [
+          { type: "text" as const, text: `Brand "${brand_slug}" not found. Run \`setup_brand\` first.` },
+        ],
+      };
+    }
+
+    // Find the matching pillar
+    const pillar = ctx.strategy?.pillars.find(
+      (p) =>
+        p.naming_convention.toLowerCase().includes(pillar_name.toLowerCase()) ||
+        p.angle.toLowerCase().includes(pillar_name.toLowerCase()) ||
+        (p.sub_angle && p.sub_angle.toLowerCase().includes(pillar_name.toLowerCase()))
+    );
+
+    if (!pillar) {
+      const available = (ctx.strategy?.pillars || [])
+        .map((p) => `- ${p.naming_convention || p.angle}${p.sub_angle ? ` (${p.sub_angle})` : ""}`)
+        .join("\n");
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `No pillar matching "${pillar_name}" found.\n\nAvailable pillars:\n${available || "_No strategy imported yet._"}`,
+          },
+        ],
+      };
+    }
+
+    // Build rich pillar context
+    const pspSection =
+      typeof pillar.problem_solution_promise === "object"
+        ? [
+            `**Problem:** ${pillar.problem_solution_promise.problem}`,
+            `**Solution:** ${pillar.problem_solution_promise.solution}`,
+            `**Promise:** ${pillar.problem_solution_promise.promise}`,
+          ].join("\n")
+        : `**P>S>P:** ${pillar.problem_solution_promise || "—"}`;
+
+    const baSection =
+      typeof pillar.before_after === "object"
+        ? `**Before:** ${pillar.before_after.before || "—"}\n**After:** ${pillar.before_after.after || "—"}`
+        : `**Before/After:** ${pillar.before_after || "—"}`;
+
+    const hookExamples = (pillar.example_ugc_hooks || [pillar.example_ugc_hook]).filter(Boolean);
+    const headlineExamples = (pillar.example_headlines || [pillar.example_headline]).filter(Boolean);
+
+    const brief = [
+      `## Script Generation Brief`,
+      ``,
+      `**Brand:** ${ctx.profile.name}`,
+      `**Product:** ${ctx.strategy?.product || ctx.profile.product || "—"}`,
+      `**Video ID:** \`${video_id}\``,
+      `**Target Duration:** ${target_duration}s`,
+      `**Format:** ${format}`,
+      additional_direction ? `**Direction:** ${additional_direction}` : null,
+      ``,
+      `---`,
+      ``,
+      `### Target Angle: ${pillar.naming_convention || pillar.angle}`,
+      pillar.sub_angle ? `**Sub-Angle:** ${pillar.sub_angle}` : null,
+      `**Persona:** ${pillar.persona || "—"}`,
+      pillar.audience_persona
+        ? `**Audience:** ${pillar.audience_persona.type} (${pillar.audience_persona.awareness_level})`
+        : null,
+      `**Benefits:** ${pillar.primary_benefits.join(", ") || "—"}`,
+      ``,
+      `### Emotional Fear`,
+      pillar.emotional_fear || "—",
+      ``,
+      `### Problem > Solution > Promise`,
+      pspSection,
+      ``,
+      `### Before / After`,
+      baSection,
+      ``,
+      `### Example Headlines`,
+      ...headlineExamples.map((h, i) => `${i + 1}. ${h}`),
+      ``,
+      `### Example UGC Hooks`,
+      ...hookExamples.map((h, i) => `${i + 1}. ${h}`),
+      ``,
+      `### Key Points / Framing`,
+      ...pillar.key_points_framing.map((k) => `- ${k}`),
+      pillar.output_instructions?.emotional_drivers?.length
+        ? `\n### Emotional Drivers\n${pillar.output_instructions.emotional_drivers.map((d) => `- ${d}`).join("\n")}`
+        : null,
+      ``,
+      `---`,
+      ``,
+      `### Reference Video Analysis`,
+      video_analysis_summary,
+      ``,
+      `---`,
+      ``,
+      renderCreativeGuidelines(),
+      ``,
+      ctx.strategy?.mission
+        ? [
+            `### Product-Specific Mission`,
+            `**Goal:** ${ctx.strategy.mission.goal}`,
+            `**Requirements:** ${ctx.strategy.mission.requirements.map((r) => `\n- ${r}`).join("")}`,
+            `**Negative Requirements:** ${ctx.strategy.mission.negative_requirements.map((r) => `\n- ${r}`).join("")}`,
+          ].join("\n")
+        : null,
+      ``,
+      `---`,
+      ``,
+      `## Instructions for Claude`,
+      ``,
+      `Generate **3 distinct script variations** for a ${target_duration}-second ${format} video ad.`,
+      `Each script targets the **${pillar.naming_convention || pillar.angle}** angle${pillar.sub_angle ? ` / ${pillar.sub_angle} sub-angle` : ""}.`,
+      ``,
+      `Each variation MUST:`,
+      `- Open with a **different scroll-stopping hook** from the angle's examples or inspired by the reference video`,
+      `- Follow the **Problem > Solution > Promise** framework from the pillar`,
+      `- Tap the **emotional fear** specific to this angle`,
+      `- Use authentic, review-inspired language (not ad-speak)`,
+      `- End with a direct, urgent CTA`,
+      ``,
+      `**Format each script as a table:**`,
+      ``,
+      `### Script [#]: "[Variation Name]"`,
+      `**Hook Type:** [e.g., Shock Stat, Confession, UGC Cold Open]`,
+      `**Emotional Driver:** [Primary emotion this variation targets]`,
+      ``,
+      `| Scene | Time | Visual | Audio / Voiceover | On-Screen Text | Notes |`,
+      `|-------|------|--------|-------------------|----------------|-------|`,
+      `| 1 | 0-3s | [Hook visual] | "[Opening line]" | [BOLD TEXT] | Pattern interrupt |`,
+      `| 2 | 3-Xs | [Problem visual] | "[Problem VO]" | [Stats/text] | Build tension |`,
+      `| ... | ... | ... | ... | ... | ... |`,
+      `| N | Xs-${target_duration}s | [CTA visual] | "[CTA line]" | [CTA TEXT] | Urgency close |`,
+      ``,
+      `After all 3 scripts, provide:`,
+      `1. **Variation Comparison** — which variation is strongest for cold traffic vs. retargeting vs. social proof`,
+      `2. **Production Notes** — talent requirements, key props, shooting considerations`,
+      `3. **Recommended A/B Test** — which 2 variations to test first and why`,
+    ]
+      .filter((line) => line !== null)
+      .join("\n");
+
+    return {
+      content: [{ type: "text" as const, text: brief }],
+    };
+  }
+);
+
+// ── Tool 19: Analyze Image Ad ────────────────────────────────────────
+
+server.tool(
+  "analyze_image_ad",
+  `Perform a creative teardown of a reference image ad (static, carousel frame, etc.).
+Accepts images from a URL, Google Drive, or local file path.
+
+Returns the image for Claude to see and a structured creative teardown prompt
+covering hook, copy analysis, visual hierarchy, emotional triggers, and more.
+
+Pass brand_slug to cross-reference against the brand's strategy pillars.`,
+  {
+    source: z
+      .enum(["url", "google_drive", "local"])
+      .describe("Where to load the image from"),
+    url: z
+      .string()
+      .optional()
+      .describe("Image URL (required when source is 'url')"),
+    file_id: z
+      .string()
+      .optional()
+      .describe("Google Drive file ID or share link (required when source is 'google_drive')"),
+    local_path: z
+      .string()
+      .optional()
+      .describe("Absolute path to local image file (required when source is 'local')"),
+    brand_slug: z
+      .string()
+      .optional()
+      .describe("Brand slug — auto-loads strategy pillars for cross-referencing"),
+    ad_context: z
+      .string()
+      .optional()
+      .describe("Any known context about the ad (brand, platform, campaign, etc.)"),
+  },
+  async ({ source, url, file_id, local_path, brand_slug, ad_context }) => {
+    const content: ContentBlock[] = [];
+    let imageBase64: string;
+    let mimeType: string;
+    let imageName = "image";
+
+    try {
+      if (source === "url") {
+        if (!url) {
+          return {
+            content: [{ type: "text" as const, text: "Please provide a `url` when source is 'url'." }],
+          };
+        }
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`Failed to fetch image: ${resp.status} ${resp.statusText}`);
+        const buffer = Buffer.from(await resp.arrayBuffer());
+        imageBase64 = buffer.toString("base64");
+        mimeType = resp.headers.get("content-type") || "image/jpeg";
+        imageName = url.split("/").pop()?.split("?")[0] || "image";
+      } else if (source === "google_drive") {
+        if (!file_id) {
+          return {
+            content: [{ type: "text" as const, text: "Please provide a `file_id` when source is 'google_drive'." }],
+          };
+        }
+        let driveFileId = file_id;
+        const driveUrlMatch = file_id.match(/\/d\/([a-zA-Z0-9_-]+)/);
+        if (driveUrlMatch) driveFileId = driveUrlMatch[1];
+
+        const drive = getGoogleDriveService();
+        const { buffer, name, mimeType: mt } = await drive.downloadFile(driveFileId);
+        imageBase64 = buffer.toString("base64");
+        mimeType = mt || "image/jpeg";
+        imageName = name;
+      } else {
+        if (!local_path) {
+          return {
+            content: [{ type: "text" as const, text: "Please provide a `local_path` when source is 'local'." }],
+          };
+        }
+        const fs = await import("fs/promises");
+        const buffer = await fs.readFile(local_path);
+        imageBase64 = buffer.toString("base64");
+        const ext = local_path.split(".").pop()?.toLowerCase() || "jpg";
+        const mimeMap: Record<string, string> = {
+          jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png",
+          gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+        };
+        mimeType = mimeMap[ext] || "image/jpeg";
+        imageName = local_path.split("/").pop() || "image";
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: "text" as const, text: `Failed to load image: ${msg}` }],
+      };
+    }
+
+    // Show the image
+    content.push(
+      { type: "text", text: `## Image Ad Analysis — ${imageName}\n` },
+      { type: "image", data: imageBase64, mimeType }
+    );
+
+    // Add ad context if provided
+    if (ad_context) {
+      content.push({ type: "text", text: `\n**Context:** ${ad_context}\n` });
+    }
+
+    // Creative teardown prompt for image ads
+    content.push({
+      type: "text",
+      text: [
+        ``,
+        `### Image Ad Summary`,
+        ``,
+        `Fill in these structured fields based on the image above:`,
+        ``,
+        `| Field | Value |`,
+        `|-------|-------|`,
+        `| **Ad Type** | _Static / Carousel Frame / Story / Other_ |`,
+        `| **Brand** | _Identify from logo, text, or context_ |`,
+        `| **Headline** | _Primary headline text if visible_ |`,
+        `| **Body Copy** | _Any body/description text_ |`,
+        `| **CTA** | _Call-to-action button or text_ |`,
+        `| **Platform** | _Facebook / Instagram / Other (infer from format)_ |`,
+        `| **Aspect Ratio** | _1:1 / 4:5 / 9:16 / 16:9_ |`,
+        ``,
+        `### Creative Teardown`,
+        ``,
+        `1. **Visual Hook**: What grabs attention first? Rate scroll-stop power (1-10). Is it bold, provocative, or pattern-interrupting enough?`,
+        `2. **Visual Hierarchy**: Eye path — what do you see 1st, 2nd, 3rd? How does the layout guide the viewer?`,
+        `3. **Headline Analysis**: Is the headline scroll-stopping? Does it hook in under 2 seconds? Rate: Bold / Moderate / Tame.`,
+        `4. **Copy Analysis**: Primary text tone — proactive or passive? Does it create urgency? Use specific numbers?`,
+        `5. **Color & Contrast**: Dominant colors, contrast strategy, brand consistency. Does it stand out in a feed?`,
+        `6. **Typography**: Font choices, hierarchy, readability. Bold enough to read on mobile?`,
+        `7. **Product Presentation**: How is the product shown? Hero shot, lifestyle, UGC-style, comparison?`,
+        `8. **Emotional Triggers**: What emotions does this ad target? Fear, aspiration, social proof, curiosity, urgency?`,
+        `9. **Social Proof**: Reviews, ratings, testimonials, user counts, or trust badges present?`,
+        `10. **CTA Execution**: Is the CTA clear, direct, and urgent? Or buried/weak?`,
+        `11. **Target Audience Signals**: Who is this for? Visual and copy cues indicating target demo.`,
+        `12. **What's Working**: What makes this effective? Key elements worth adapting.`,
+        `13. **What's Weak**: What could be improved? Missed opportunities.`,
+        ``,
+        renderTeardownGuidelines(),
+      ].join("\n"),
+    });
+
+    // Brand cross-reference
+    if (brand_slug) {
+      const ctx = await brandStore.getFullContext(brand_slug);
+      if (ctx && ctx.strategy?.pillars.length) {
+        const angleList = ctx.strategy.pillars
+          .map(
+            (p, i) =>
+              `${i + 1}. **${p.naming_convention || p.angle}**${p.sub_angle ? ` — ${p.sub_angle}` : ""}: ${p.emotional_fear ? p.emotional_fear.slice(0, 100) + "..." : p.description || "—"}`
+          )
+          .join("\n");
+
+        content.push({
+          type: "text",
+          text: [
+            ``,
+            `### Angle Cross-Reference — ${ctx.profile.name}${ctx.strategy.product ? ` (${ctx.strategy.product})` : ""}`,
+            ``,
+            `**Strategy Pillars:**`,
+            angleList,
+            ``,
+            `For this image ad, evaluate each angle:`,
+            ``,
+            `| Angle | Alignment | Evidence | Adaptable Elements |`,
+            `|-------|-----------|----------|--------------------|`,
+            ...ctx.strategy.pillars.map(
+              (p) =>
+                `| **${p.naming_convention || p.angle}** | _Strong / Moderate / Weak_ | _What in this image supports this angle?_ | _Visuals, copy, or structure worth adapting_ |`
+            ),
+            ``,
+            `**Top Angle Recommendation:** _Which angle best aligns with this image ad's approach?_`,
+            `**Script Adaptation Notes:** _How would you translate this image ad's strongest elements into a video script for ${ctx.profile.name}?_`,
+          ].join("\n"),
+        });
+      }
+    }
+
+    return { content };
+  }
+);
+
 // ── Start server ────────────────────────────────────────────────────
 
 async function main() {
