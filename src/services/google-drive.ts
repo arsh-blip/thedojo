@@ -1,6 +1,6 @@
 import { google } from "googleapis";
 import type { OAuth2Client } from "google-auth-library";
-import type { MessagingDocument } from "../types.js";
+import type { MessagingDocument, DriveFileInfo } from "../types.js";
 
 export class GoogleDriveService {
   private drive;
@@ -91,6 +91,39 @@ export class GoogleDriveService {
       { responseType: "text" }
     );
     return response.data as string;
+  }
+
+  /**
+   * List all files in a Google Drive folder (non-recursive).
+   * Returns file metadata including ID, name, MIME type, and size.
+   */
+  async listFolderContents(folderId: string): Promise<DriveFileInfo[]> {
+    const allFiles: DriveFileInfo[] = [];
+    let pageToken: string | undefined;
+
+    do {
+      const response = await this.drive.files.list({
+        q: `'${folderId}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: "nextPageToken, files(id, name, mimeType, size)",
+        orderBy: "name",
+        pageSize: 100,
+        pageToken,
+      });
+
+      const files = response.data.files || [];
+      for (const f of files) {
+        allFiles.push({
+          id: f.id!,
+          name: f.name!,
+          mimeType: f.mimeType!,
+          size: f.size ? parseInt(f.size, 10) : undefined,
+        });
+      }
+
+      pageToken = response.data.nextPageToken ?? undefined;
+    } while (pageToken);
+
+    return allFiles;
   }
 
   async parseMessagingDocument(fileId: string): Promise<MessagingDocument> {

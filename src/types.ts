@@ -85,3 +85,59 @@ export interface ConceptSlideData {
   target_audience: string;
   key_messaging_points: string[];
 }
+
+// ── Asset Queue & Analysis Types ─────────────────────────────────────
+
+export type AssetFileType = "video" | "image" | "document" | "audio" | "other";
+
+export interface QueuedAsset {
+  id: string;
+  source: "local" | "google_drive";
+  sourcePath: string; // local file path or Drive file ID
+  filename: string;
+  mimeType: string;
+  fileSize?: number;
+  status: "pending" | "processing" | "completed" | "failed";
+  analysisResult?: AssetAnalysisResult;
+  error?: string;
+  queuedAt: string;
+  processedAt?: string;
+}
+
+export interface AdSpecCheck {
+  spec: string;
+  passed: boolean;
+  message: string;
+}
+
+export interface AssetAnalysisResult {
+  assetId: string;
+  filename: string;
+  fileType: AssetFileType;
+  mimeType: string;
+  fileSize: number;
+  dimensions?: { width: number; height: number };
+  durationSeconds?: number;
+  adSpecCompliance: AdSpecCheck[];
+  tags: string[];
+  summary: string;
+}
+
+export interface AssetQueue {
+  id: string;
+  name: string;
+  source: "local" | "google_drive";
+  sourcePath: string;
+  batchSize: number;
+  totalAssets: number;
+  assets: QueuedAsset[];
+  createdAt: string;
+  status: "idle" | "processing" | "completed";
+}
+
+export interface DriveFileInfo {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: number;
+}

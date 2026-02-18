@@ -10,7 +10,16 @@ import type {
   AdCopy,
   AngleRecommendation,
   ConceptSlideData,
+  AssetAnalysisResult,
 } from "./types.js";
+import {
+  scanLocalFolder,
+  scanDriveFolder,
+  processNextBatch,
+  getQueueStatus,
+  getAnalysisResults,
+  listQueues,
+} from "./services/asset-queue.js";
 
 // ── Initialize services ─────────────────────────────────────────────
 
@@ -557,6 +566,399 @@ or seeing the current state of a concept deck before updating it.`,
     };
   }
 );
+
+// ── Tool 7: Scan Asset Folder ────────────────────────────────────────
+
+server.tool(
+  "scan_asset_folder",
+  `Scan a folder of creative assets (local path or Google Drive folder) and create a processing queue.
+Use this when a brand sends a batch of videos, images, or other creative files that need to be
+analyzed before use. The queue will process assets in configurable batches (default: 2 at a time).
+
+Returns a queue ID that you use with process_next_batch to work through the assets.
+Supports: video (MP4, MOV, WebM), images (JPG, PNG, WebP, GIF), audio, PDFs, PSD, and more.`,
+  {
+    source: z
+      .enum(["local", "google_drive"])
+      .describe("Where the assets are stored"),
+    folder_path: z
+      .string()
+      .describe(
+        "Local folder path (for 'local' source) or Google Drive folder ID (for 'google_drive' source)"
+      ),
+    batch_size: z
+      .number()
+      .min(1)
+      .max(20)
+      .default(2)
+      .describe(
+        "Number of assets to process per batch (default: 2)"
+      ),
+    queue_name: z
+      .string()
+      .optional()
+      .describe(
+        "Optional name for this queue (e.g. brand name or campaign)"
+      ),
+  },
+  async ({ source, folder_path, batch_size, queue_name }) => {
+    try {
+      let queue;
+
+      if (source === "local") {
+        queue = await scanLocalFolder(folder_path, batch_size, queue_name);
+      } else {
+        const drive = getGoogleDriveService();
+        queue = await scanDriveFolder(
+          drive,
+          folder_path,
+          batch_size,
+          queue_name
+        );
+      }
+
+      if (queue.totalAssets === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `No creative assets found in ${source === "local" ? `folder "${folder_path}"` : `Drive folder "${folder_path}"`}. Supported formats: video (MP4, MOV, WebM), images (JPG, PNG, WebP, GIF), audio, PDF, PSD.`,
+            },
+          ],
+        };
+      }
+
+      // Summarize what was found by type
+      const typeCounts: Record<string, number> = {};
+      for (const asset of queue.assets) {
+        const ext =
+          asset.filename.split(".").pop()?.toLowerCase() || "unknown";
+        typeCounts[ext] = (typeCounts[ext] || 0) + 1;
+      }
+      const typeBreakdown = Object.entries(typeCounts)
+        .map(([ext, count]) => `${count} .${ext}`)
+        .join(", ");
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `## Queue Created: ${queue.name}
+
+**Queue ID:** \`${queue.id}\`
+**Source:** ${source === "local" ? folder_path : `Google Drive folder ${folder_path}`}
+**Total assets:** ${queue.totalAssets}
+**Batch size:** ${queue.batchSize}
+**Breakdown:** ${typeBreakdown}
+
+The queue is ready. Call \`process_next_batch\` with queue_id \`${queue.id}\` to start analyzing the first batch of ${Math.min(queue.batchSize, queue.totalAssets)} assets.
+
+**Agentic workflow:** Keep calling \`process_next_batch\` until all assets are analyzed. Use \`get_queue_status\` to check progress at any time.`,
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Failed to scan folder: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// ── Tool 8: Process Next Batch ──────────────────────────────────────
+
+server.tool(
+  "process_next_batch",
+  `Process the next batch of assets in a queue. Each call analyzes the next N assets (where N is
+the queue's batch size) — extracting file metadata, checking Meta ad spec compliance, and
+generating tags and summaries.
+
+Call this repeatedly to work through the entire queue. The tool tells you how many assets remain
+so you know when to stop. This is the core of the agentic loop — each batch returns structured
+analysis that you can reason about before processing the next batch.`,
+  {
+    queue_id: z.string().describe("The queue ID returned by scan_asset_folder"),
+  },
+  async ({ queue_id }) => {
+    const driveService = (() => {
+      try {
+        return getGoogleDriveService();
+      } catch {
+        return undefined;
+      }
+    })();
+
+    const result = await processNextBatch(queue_id, driveService);
+
+    if (!result) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Queue \`${queue_id}\` not found. Use \`scan_asset_folder\` first to create a queue, or \`get_queue_status\` to list active queues.`,
+          },
+        ],
+      };
+    }
+
+    if (result.batchResults.length === 0 && result.queueComplete) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Queue is already complete — all assets have been processed. Use \`get_analysis_results\` to retrieve the full results.`,
+          },
+        ],
+      };
+    }
+
+    const batchSummary = result.batchResults
+      .map((r) => formatAnalysisResult(r))
+      .join("\n\n---\n\n");
+
+    const statusLine = result.queueComplete
+      ? "**Queue complete!** All assets have been analyzed."
+      : `**${result.remaining} assets remaining.** Call \`process_next_batch\` again to continue.`;
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `## Batch Analysis Complete (${result.batchResults.length} assets)\n\n${batchSummary}\n\n---\n\n${statusLine}`,
+        },
+      ],
+    };
+  }
+);
+
+// ── Tool 9: Get Queue Status ────────────────────────────────────────
+
+server.tool(
+  "get_queue_status",
+  `Check the current status of an asset processing queue, or list all active queues.
+Shows counts of pending, processing, completed, and failed assets.`,
+  {
+    queue_id: z
+      .string()
+      .optional()
+      .describe(
+        "Specific queue ID to check. Omit to list all active queues."
+      ),
+  },
+  async ({ queue_id }) => {
+    // List all queues if no ID provided
+    if (!queue_id) {
+      const allQueues = listQueues();
+      if (allQueues.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No active queues. Use `scan_asset_folder` to create one.",
+            },
+          ],
+        };
+      }
+
+      const list = allQueues
+        .map(
+          (q) =>
+            `- **${q.name}** (\`${q.id}\`): ${q.status} — ${q.completed}/${q.total} completed`
+        )
+        .join("\n");
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `## Active Queues\n\n${list}`,
+          },
+        ],
+      };
+    }
+
+    const status = getQueueStatus(queue_id);
+    if (!status) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Queue \`${queue_id}\` not found.`,
+          },
+        ],
+      };
+    }
+
+    const progressBar = makeProgressBar(status.completed, status.total);
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `## Queue: ${status.name}
+
+**Status:** ${status.status}
+**Progress:** ${progressBar} ${status.completed}/${status.total}
+
+| State | Count |
+|-------|-------|
+| Pending | ${status.pending} |
+| Processing | ${status.processing} |
+| Completed | ${status.completed} |
+| Failed | ${status.failed} |
+
+**Batch size:** ${status.batchSize}
+${status.pending > 0 ? `\nCall \`process_next_batch\` to process the next ${Math.min(status.batchSize, status.pending)} assets.` : "\nAll assets have been processed. Use `get_analysis_results` to retrieve results."}`,
+        },
+      ],
+    };
+  }
+);
+
+// ── Tool 10: Get Analysis Results ───────────────────────────────────
+
+server.tool(
+  "get_analysis_results",
+  `Retrieve completed analysis results from a processing queue.
+Returns detailed metadata, ad spec compliance, and tags for all analyzed assets.
+Use this after processing batches to get a consolidated view of all results.`,
+  {
+    queue_id: z
+      .string()
+      .describe("The queue ID to retrieve results from"),
+    filter_type: z
+      .enum(["all", "video", "image", "document", "audio", "other"])
+      .default("all")
+      .describe("Filter results by asset type"),
+    only_failures: z
+      .boolean()
+      .default(false)
+      .describe("Only show assets that failed ad spec checks"),
+  },
+  async ({ queue_id, filter_type, only_failures }) => {
+    const results = getAnalysisResults(queue_id);
+
+    if (!results) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Queue \`${queue_id}\` not found.`,
+          },
+        ],
+      };
+    }
+
+    if (results.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `No completed analyses yet. Use \`process_next_batch\` to start processing.`,
+          },
+        ],
+      };
+    }
+
+    let filtered = results;
+
+    if (filter_type !== "all") {
+      filtered = filtered.filter((r) => r.fileType === filter_type);
+    }
+
+    if (only_failures) {
+      filtered = filtered.filter((r) =>
+        r.adSpecCompliance.some((c) => !c.passed)
+      );
+    }
+
+    if (filtered.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `No results match the filter (type: ${filter_type}, only_failures: ${only_failures}). ${results.length} total results available.`,
+          },
+        ],
+      };
+    }
+
+    const formatted = filtered.map((r) => formatAnalysisResult(r)).join("\n\n---\n\n");
+
+    // Build a quick summary
+    const typeBreakdown: Record<string, number> = {};
+    for (const r of filtered) {
+      typeBreakdown[r.fileType] = (typeBreakdown[r.fileType] || 0) + 1;
+    }
+    const specFailures = filtered.filter((r) =>
+      r.adSpecCompliance.some((c) => !c.passed)
+    ).length;
+
+    const summaryParts = [
+      `**${filtered.length} assets**`,
+      Object.entries(typeBreakdown)
+        .map(([type, count]) => `${count} ${type}`)
+        .join(", "),
+      specFailures > 0
+        ? `${specFailures} with ad spec issues`
+        : "all passing ad spec checks",
+    ];
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `## Analysis Results\n\n${summaryParts.join(" | ")}\n\n${formatted}`,
+        },
+      ],
+    };
+  }
+);
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+function formatAnalysisResult(r: AssetAnalysisResult): string {
+  const specLines = r.adSpecCompliance
+    .map((c) => `  ${c.passed ? "PASS" : "FAIL"} ${c.spec}: ${c.message}`)
+    .join("\n");
+
+  const parts = [
+    `### ${r.filename}`,
+    `**Type:** ${r.fileType} (${r.mimeType})`,
+    `**Size:** ${formatBytes(r.fileSize)}`,
+  ];
+
+  if (r.dimensions) {
+    parts.push(`**Dimensions:** ${r.dimensions.width}x${r.dimensions.height}`);
+  }
+  if (r.durationSeconds !== undefined) {
+    parts.push(`**Duration:** ${r.durationSeconds}s`);
+  }
+
+  parts.push(`**Tags:** ${r.tags.join(", ")}`);
+  parts.push(`**Ad Spec Compliance:**\n${specLines}`);
+  parts.push(`**Summary:** ${r.summary}`);
+
+  return parts.join("\n");
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function makeProgressBar(completed: number, total: number): string {
+  const pct = total === 0 ? 100 : Math.round((completed / total) * 100);
+  const filled = Math.round(pct / 5);
+  return "[" + "#".repeat(filled) + "-".repeat(20 - filled) + "] " + pct + "%";
+}
 
 // ── Start server ────────────────────────────────────────────────────
 
