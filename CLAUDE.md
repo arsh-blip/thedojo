@@ -24,7 +24,8 @@ Add to your Claude settings (`~/.claude/settings.json` or project `.mcp.json`):
         "GOOGLE_CLIENT_ID": "your_id",
         "GOOGLE_CLIENT_SECRET": "your_secret",
         "GOOGLE_REFRESH_TOKEN": "your_token",
-        "OPENAI_API_KEY": "your_key"
+        "OPENAI_API_KEY": "your_key",
+        "GOOGLE_AI_STUDIO_API_KEY": "your_key"
       }
     }
   }
@@ -94,6 +95,38 @@ Use `get_concept_history` to view all iterations for a session or list active se
 - **ffmpeg** must be installed for video processing (`brew install ffmpeg` or `apt install ffmpeg`)
 - **OPENAI_API_KEY** must be set for Whisper audio transcription (optional — video analysis works without it)
 
+## AI Creative Generation Workflow
+
+For generating ad creative assets (images and video) using Google AI Studio:
+
+### Generate Ad Images (Nano Banana Pro)
+Use `generate_ad_image` to create ad creative images — product shots, lifestyle imagery,
+text overlay compositions, and ad mockups. Supports reference image input for style-matching.
+
+Example: "Generate a hero product shot of a moisturizer on marble, golden hour lighting, 4:5 aspect ratio for Instagram feed"
+
+### Generate Ad Videos (Veo 3.1)
+Use `generate_ad_video` to create short video clips — product demos, B-roll, UGC-style content,
+hook visuals, and unboxing sequences. Includes native audio generation (dialogue, ambient sounds, music).
+
+Example: "Generate a 9:16 vertical video of hands unboxing a skincare set, ASMR-style audio, clean white background"
+
+Two model variants:
+- **Standard** (`veo-3.1-generate-preview`): Highest quality, best for final assets
+- **Fast** (`veo-3.1-fast-generate-preview`): 2x faster, ~1/5 cost, best for drafts and iteration
+
+### End-to-End Creative Generation Flow
+1. Analyze reference ads with `search_reference_ads` + `analyze_image_ad` / `analyze_video`
+2. Write ad copy with `write_ad_copy`
+3. Generate visual concept drafts with `generate_ad_image` (use fast iteration with 1K resolution)
+4. Generate video clips with `generate_ad_video` (use `fast` model for drafts)
+5. Review generated assets, refine prompts, and regenerate at higher quality
+6. Push finalized concepts to Google Slides with `update_concept_slides`
+
+### Requirements
+- **GOOGLE_AI_STUDIO_API_KEY** must be set (get from [aistudio.google.com](https://aistudio.google.com))
+- Billing must be enabled on the Google AI Studio account (no free tier for API access)
+
 ## Available Tools
 
 | Tool | Purpose |
@@ -109,3 +142,5 @@ Use `get_concept_history` to view all iterations for a session or list active se
 | `propose_video_concept` | Start iterative concept refinement from video analysis |
 | `refine_concept` | Iterate on a concept with feedback |
 | `get_concept_history` | View iteration history for a concept session |
+| `generate_ad_image` | Generate ad images with Nano Banana Pro (Gemini 3 Pro Image) |
+| `generate_ad_video` | Generate ad video clips with Veo 3.1 |

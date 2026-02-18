@@ -21,6 +21,7 @@ import {
   type VideoSource,
   type BatchItemResult,
 } from "./services/video-queue.js";
+import { GoogleAIStudioService } from "./services/google-ai-studio.js";
 import type {
   FacebookAd,
   AdCopy,
@@ -59,6 +60,12 @@ function getTranscriptionService(): TranscriptionService {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
   return new TranscriptionService(apiKey);
+}
+
+function getGoogleAIStudioService(): GoogleAIStudioService {
+  const apiKey = process.env.GOOGLE_AI_STUDIO_API_KEY;
+  if (!apiKey) throw new Error("GOOGLE_AI_STUDIO_API_KEY is not set");
+  return new GoogleAIStudioService(apiKey);
 }
 
 // ── MCP Server ──────────────────────────────────────────────────────
@@ -2757,6 +2764,251 @@ Pass brand_slug to cross-reference against the brand's strategy pillars.`,
     }
 
     return { content };
+  }
+);
+
+// ── Tool: Generate Ad Image (Nano Banana Pro) ─────────────────────
+
+server.tool(
+  "generate_ad_image",
+  `Generate ad creative images using Google's Nano Banana Pro (Gemini 3 Pro Image).
+Creates high-quality product shots, lifestyle imagery, text overlays, and ad mockups.
+Supports reference image input for style-matching and editing. Returns the generated image.`,
+  {
+    prompt: z
+      .string()
+      .describe(
+        "Detailed image generation prompt. Be specific about composition, lighting, style, text overlays, and mood. E.g. 'A hero product shot of a skincare serum bottle on a marble surface, golden hour lighting, soft shadows, editorial beauty photography, text overlay reading GLOW FROM WITHIN'"
+      ),
+    aspect_ratio: z
+      .enum(["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9"])
+      .default("1:1")
+      .describe(
+        "Image aspect ratio. Use 1:1 for feed posts, 9:16 for Stories/Reels, 4:5 for Instagram feed, 16:9 for landscape/YouTube"
+      ),
+    image_size: z
+      .enum(["1K", "2K", "4K"])
+      .default("2K")
+      .describe("Output resolution. 1K for drafts, 2K for review, 4K for final assets"),
+    reference_image_base64: z
+      .string()
+      .optional()
+      .describe(
+        "Optional base64-encoded reference image for style-matching or editing. Use with prompts like 'Edit this image to add a text overlay' or 'Generate a similar product shot in this style'"
+      ),
+    reference_image_mime_type: z
+      .string()
+      .default("image/jpeg")
+      .optional()
+      .describe("MIME type of the reference image (image/jpeg, image/png, image/webp)"),
+    brand_slug: z
+      .string()
+      .optional()
+      .describe("Optional brand slug to include brand context in the generation prompt"),
+  },
+  async (params) => {
+    const service = getGoogleAIStudioService();
+
+    // If brand context is requested, prepend it to the prompt
+    let finalPrompt = params.prompt;
+    if (params.brand_slug) {
+      const ctx = await brandStore.getFullContext(params.brand_slug);
+      if (ctx) {
+        const brandContext = [
+          `Brand: ${ctx.profile.name}`,
+          ctx.profile.brand_voice
+            ? `Voice: ${ctx.profile.brand_voice.tone}, ${ctx.profile.brand_voice.style}`
+            : "",
+          ctx.profile.target_audience
+            ? `Target Audience: ${ctx.profile.target_audience}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(". ");
+        finalPrompt = `${brandContext}.\n\n${params.prompt}`;
+      }
+    }
+
+    // Build reference images array
+    const referenceImages =
+      params.reference_image_base64
+        ? [
+            {
+              base64: params.reference_image_base64,
+              mimeType: params.reference_image_mime_type || "image/jpeg",
+            },
+          ]
+        : undefined;
+
+    const result = await service.generateImage({
+      prompt: finalPrompt,
+      aspectRatio: params.aspect_ratio as any,
+      imageSize: params.image_size as any,
+      referenceImages,
+    });
+
+    const content: ContentBlock[] = [];
+
+    if (result.text) {
+      content.push({ type: "text", text: result.text });
+    }
+
+    content.push({
+      type: "image",
+      data: result.base64,
+      mimeType: result.mimeType,
+    });
+
+    content.push({
+      type: "text",
+      text: [
+        `**Image Generated** (Nano Banana Pro)`,
+        `- Aspect Ratio: ${params.aspect_ratio || "1:1"}`,
+        `- Resolution: ${params.image_size || "2K"}`,
+        `- Prompt: ${params.prompt.slice(0, 200)}${params.prompt.length > 200 ? "..." : ""}`,
+        params.reference_image_base64
+          ? `- Reference image provided for style-matching`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    });
+
+    return { content };
+  }
+);
+
+// ── Tool: Generate Ad Video (Veo 3.1) ─────────────────────────────
+
+server.tool(
+  "generate_ad_video",
+  `Generate short ad video clips using Google's Veo 3.1.
+Creates product demos, lifestyle B-roll, UGC-style clips, hook visuals, and more.
+Supports standard (highest quality) and fast (2x speed, lower cost) modes.
+Videos include native audio generation (dialogue, ambient sounds, music).
+Returns the video file path for review or further processing.`,
+  {
+    prompt: z
+      .string()
+      .describe(
+        "Detailed video generation prompt. Describe the scene, camera movement, lighting, audio, pacing, and mood. E.g. 'Close-up cinematic shot of a woman applying moisturizer to her face, soft natural lighting, shallow depth of field, she smiles subtly, gentle ambient music, camera slowly pulls back to reveal the product bottle'"
+      ),
+    model: z
+      .enum(["standard", "fast"])
+      .default("standard")
+      .describe(
+        "Model variant. 'standard' = highest quality (Veo 3.1). 'fast' = 2x faster, ~1/5 cost (Veo 3.1 Fast). Use fast for drafts and iteration."
+      ),
+    aspect_ratio: z
+      .enum(["16:9", "9:16"])
+      .default("9:16")
+      .describe(
+        "Video aspect ratio. 9:16 for Stories/Reels/TikTok (vertical), 16:9 for YouTube/feed (landscape)"
+      ),
+    resolution: z
+      .enum(["720p", "1080p", "4k"])
+      .default("1080p")
+      .describe(
+        "Output resolution. 720p for quick drafts, 1080p for review, 4k for final assets"
+      ),
+    duration_seconds: z
+      .enum(["4", "6", "8"])
+      .default("8")
+      .describe(
+        "Video duration in seconds. Must be '8' for 1080p or 4k resolution"
+      ),
+    negative_prompt: z
+      .string()
+      .optional()
+      .describe(
+        "Things to avoid in the video. E.g. 'blurry, low quality, text watermark, distorted faces'"
+      ),
+    reference_image_base64: z
+      .string()
+      .optional()
+      .describe(
+        "Optional base64-encoded reference image to use as the first frame or style reference"
+      ),
+    reference_image_mime_type: z
+      .string()
+      .default("image/jpeg")
+      .optional()
+      .describe("MIME type of the reference image"),
+    brand_slug: z
+      .string()
+      .optional()
+      .describe("Optional brand slug to include brand context in the prompt"),
+  },
+  async (params) => {
+    const service = getGoogleAIStudioService();
+
+    // Enrich prompt with brand context
+    let finalPrompt = params.prompt;
+    if (params.brand_slug) {
+      const ctx = await brandStore.getFullContext(params.brand_slug);
+      if (ctx) {
+        const brandContext = [
+          `Brand: ${ctx.profile.name}`,
+          ctx.profile.brand_voice
+            ? `Voice/Tone: ${ctx.profile.brand_voice.tone}, ${ctx.profile.brand_voice.style}`
+            : "",
+          ctx.profile.target_audience
+            ? `Target Audience: ${ctx.profile.target_audience}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(". ");
+        finalPrompt = `${brandContext}.\n\n${params.prompt}`;
+      }
+    }
+
+    // Build reference image
+    const referenceImage = params.reference_image_base64
+      ? {
+          base64: params.reference_image_base64,
+          mimeType: params.reference_image_mime_type || "image/jpeg",
+        }
+      : undefined;
+
+    const modelLabel =
+      params.model === "fast" ? "Veo 3.1 Fast" : "Veo 3.1 Standard";
+
+    const result = await service.generateVideo({
+      prompt: finalPrompt,
+      model: params.model as any,
+      aspectRatio: params.aspect_ratio as any,
+      resolution: params.resolution as any,
+      durationSeconds: params.duration_seconds as any,
+      negativePrompt: params.negative_prompt,
+      referenceImage,
+    });
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: [
+            `**Video Generated** (${modelLabel})`,
+            `- File: ${result.filePath}`,
+            `- Duration: ${result.durationSeconds}s`,
+            `- Aspect Ratio: ${params.aspect_ratio || "9:16"}`,
+            `- Resolution: ${params.resolution || "1080p"}`,
+            `- Prompt: ${params.prompt.slice(0, 200)}${params.prompt.length > 200 ? "..." : ""}`,
+            params.negative_prompt
+              ? `- Negative Prompt: ${params.negative_prompt}`
+              : "",
+            params.reference_image_base64
+              ? `- Reference image used as first frame`
+              : "",
+            ``,
+            `The video has been saved to \`${result.filePath}\`.`,
+            `You can use \`ingest_video\` with this path to analyze it, or use \`update_concept_slides\` to add it to a deck.`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      ],
+    };
   }
 );
 
