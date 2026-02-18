@@ -1258,12 +1258,20 @@ async function ingestVideoFromSource(
   }
 }
 
+interface BrandContext {
+  brand: string;
+  product?: string;
+  targetAudience?: string;
+  angles: { name: string; description: string; hooks: string[] }[];
+}
+
 async function analyzeVideoCore(
   videoId: string,
   opts: {
     includeTranscript: boolean;
     sceneThreshold: number;
     maxFrames: number;
+    brandContext?: BrandContext;
   }
 ): Promise<ContentBlock[]> {
   const stored = getStoredVideo(videoId);
@@ -1390,6 +1398,44 @@ async function analyzeVideoCore(
     ].join("\n"),
   });
 
+  // Angle cross-reference (when brand context is provided)
+  if (opts.brandContext && opts.brandContext.angles.length > 0) {
+    const bc = opts.brandContext;
+    const angleList = bc.angles
+      .map(
+        (a, i) =>
+          `${i + 1}. **${a.name}**: ${a.description}${a.hooks.length ? `\n   Hooks: ${a.hooks.join(" | ")}` : ""}`
+      )
+      .join("\n");
+
+    content.push({
+      type: "text",
+      text: [
+        ``,
+        `### Angle Cross-Reference — ${bc.brand}${bc.product ? ` (${bc.product})` : ""}`,
+        ``,
+        bc.targetAudience ? `**Target Audience:** ${bc.targetAudience}\n` : "",
+        `**Brand Messaging Angles:**`,
+        angleList,
+        ``,
+        `For this video, evaluate each angle:`,
+        ``,
+        `| Angle | Alignment | Evidence | Adaptable Elements |`,
+        `|-------|-----------|----------|--------------------|`,
+        ...bc.angles.map(
+          (a) =>
+            `| **${a.name}** | _Rate: Strong / Moderate / Weak_ | _What in this video supports or contradicts this angle?_ | _Specific hooks, visuals, or structures worth adapting for ${bc.brand}_ |`
+        ),
+        ``,
+        `**Top Angle Recommendation:** _Which angle from ${bc.brand}'s strategy best aligns with what's working in this video, and why?_`,
+        ``,
+        `**Adaptation Notes:** _How would you adapt this video's approach to serve ${bc.brand}'s ${bc.angles[0]?.name || "primary"} angle specifically?_`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    });
+  }
+
   return content;
 }
 
@@ -1406,8 +1452,39 @@ once every video in the batch has been analyzed.
 Each video gets the same full analysis as analyze_video:
 scene extraction, transcript, structured summary, and creative teardown.
 
+When brand context and messaging angles are provided, each video is
+cross-referenced against the brand's strategy — scoring angle alignment,
+identifying adaptable elements, and recommending which angles fit best.
+
 Accepts a mix of sources (URLs, Google Drive files, local paths).`,
   {
+    brand: z
+      .string()
+      .optional()
+      .describe("Client brand name — enables angle cross-referencing per video"),
+    product: z
+      .string()
+      .optional()
+      .describe("Specific product or service being advertised"),
+    target_audience: z
+      .string()
+      .optional()
+      .describe("Target audience description for the brand"),
+    messaging_angles: z
+      .array(
+        z.object({
+          name: z.string().describe("Angle name (e.g. 'Social Proof', 'Problem-Solution')"),
+          description: z.string().describe("What this angle communicates"),
+          hooks: z
+            .array(z.string())
+            .default([])
+            .describe("Specific hooks for this angle"),
+        })
+      )
+      .default([])
+      .describe(
+        "Brand's messaging angles from the strategy doc — each video will be scored against these"
+      ),
     videos: z
       .array(
         z.object({
@@ -1456,12 +1533,27 @@ Accepts a mix of sources (URLs, Google Drive files, local paths).`,
       .describe("Max videos to process simultaneously (default 3)"),
   },
   async ({
+    brand,
+    product,
+    target_audience,
+    messaging_angles,
     videos,
     include_transcript,
     scene_threshold,
     max_frames,
     concurrency,
   }) => {
+    // Build brand context if angles are provided
+    const brandContext: BrandContext | undefined =
+      brand && messaging_angles.length > 0
+        ? {
+            brand,
+            product,
+            targetAudience: target_audience,
+            angles: messaging_angles,
+          }
+        : undefined;
+
     // Map input to VideoSource objects
     const sources: VideoSource[] = videos.map((v) => {
       if (v.source === "url") return { type: "url" as const, url: v.url! };
@@ -1483,6 +1575,7 @@ Accepts a mix of sources (URLs, Google Drive files, local paths).`,
             includeTranscript: include_transcript,
             sceneThreshold: scene_threshold,
             maxFrames: max_frames,
+            brandContext,
           });
           return { videoId, content };
         },
@@ -1538,22 +1631,36 @@ Accepts a mix of sources (URLs, Google Drive files, local paths).`,
 
     // Final prompt for Claude to do the comparative analysis
     if (completed > 1) {
-      output.push({
-        type: "text",
-        text: [
+      const comparativeLines = [
+        ``,
+        `---`,
+        ``,
+        `## Comparative Analysis Instructions`,
+        ``,
+        `Now that all ${completed} videos have been analyzed, provide:`,
+        ``,
+        `1. **Cross-Video Patterns**: Common hooks, structures, or tactics across the videos`,
+        `2. **Standout Creative**: Which video(s) have the strongest creative execution and why`,
+        `3. **Differentiation**: How each video approaches the same category differently`,
+        `4. **Recommended Adaptations**: Key elements worth adapting for the client's next concept`,
+      ];
+
+      if (brandContext && brandContext.angles.length > 0) {
+        const angleNames = brandContext.angles.map((a) => a.name).join(", ");
+        comparativeLines.push(
           ``,
-          `---`,
+          `### Strategy Alignment Summary — ${brandContext.brand}`,
           ``,
-          `## Comparative Analysis Instructions`,
+          `Cross-reference all videos against ${brandContext.brand}'s messaging angles (${angleNames}):`,
           ``,
-          `Now that all ${completed} videos have been analyzed, provide:`,
-          ``,
-          `1. **Cross-Video Patterns**: Common hooks, structures, or tactics across the videos`,
-          `2. **Standout Creative**: Which video(s) have the strongest creative execution and why`,
-          `3. **Differentiation**: How each video approaches the same category differently`,
-          `4. **Recommended Adaptations**: Key elements worth adapting for the client's next concept`,
-        ].join("\n"),
-      });
+          `5. **Angle Scorecard**: For each angle, which video(s) demonstrate the strongest alignment? Rank them.`,
+          `6. **Best-Fit Video per Angle**: Which single video is the best reference for each angle and why?`,
+          `7. **Gap Analysis**: Are any of ${brandContext.brand}'s angles NOT well-represented across these videos? What's missing?`,
+          `8. **Priority Recommendation**: Based on what's working across all videos, which 1-2 angles should ${brandContext.brand} prioritize for its next creative, and which video(s) should serve as the primary reference?`
+        );
+      }
+
+      output.push({ type: "text", text: comparativeLines.join("\n") });
     }
 
     return { content: output };
