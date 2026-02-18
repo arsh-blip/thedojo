@@ -119,6 +119,42 @@ export interface TranscriptSegment {
 
 // ── Brand Creative Strategy Types ─────────────────────────────────────
 
+/** Problem > Solution > Promise — can be a simple string or a rich object */
+export interface ProblemSolutionPromise {
+  problem: string;
+  solution: string;
+  promise: string;
+}
+
+/** Before/After framework */
+export interface BeforeAfter {
+  before: string;
+  after: string;
+}
+
+/** Audience persona attached to a pillar */
+export interface PillarAudiencePersona {
+  type: string;
+  awareness_level: string;
+  priority: number;
+  traits: string[];
+}
+
+/** Output instructions for headline/hook generation */
+export interface PillarOutputInstructions {
+  emotional_drivers: string[];
+  headline_archetypes: string[];
+  meta_cognition_steps: string[];
+  format: string;
+}
+
+/** Creative inspiration references for a pillar */
+export interface PillarCreativeInspiration {
+  reference_headlines: string[];
+  reference_testimonial: string;
+  reference_ugc_hooks: string[];
+}
+
 /** A single creative strategy pillar/angle from the brand's strategy doc */
 export interface CreativeStrategyPillar {
   naming_convention: string;
@@ -126,21 +162,41 @@ export interface CreativeStrategyPillar {
   persona: string;
   angle: string;
   sub_angles: string[];
+  sub_angle?: string;
   primary_benefits: string[];
   description: string;
   emotional_fear: string;
-  problem_solution_promise: string;
-  before_after: string;
+  /** Simple string (legacy) or rich Problem > Solution > Promise object */
+  problem_solution_promise: string | ProblemSolutionPromise;
+  /** Simple string (legacy) or rich Before/After object */
+  before_after: string | BeforeAfter;
   frameworks: string[];
   example_headline: string;
+  example_headlines?: string[];
   example_testimonial: string;
   example_ugc_hook: string;
+  example_ugc_hooks?: string[];
   key_points_framing: string[];
   objections: string[];
+  /** Rich fields — populated from detailed strategy JSONs */
+  audience_persona?: PillarAudiencePersona;
+  output_instructions?: PillarOutputInstructions;
+  creative_inspiration?: PillarCreativeInspiration;
+  successful_formats?: string[];
+  deliverable?: string;
+}
+
+/** Brand-level mission requirements (shared across all pillars for a product) */
+export interface StrategyMission {
+  goal: string;
+  requirements: string[];
+  negative_requirements: string[];
 }
 
 /** Full creative strategy for a brand (array of pillars) */
 export interface BrandCreativeStrategy {
+  product?: string;
+  mission?: StrategyMission;
   pillars: CreativeStrategyPillar[];
   updated_at: string;
 }

@@ -5,6 +5,7 @@ import type {
   BrandProfile,
   BrandCreativeStrategy,
   CreativeStrategyPillar,
+  StrategyMission,
   BrandReview,
   TopPerformingAd,
   BrandContext,
@@ -149,10 +150,13 @@ export class BrandStore {
 
   async importStrategy(
     slug: string,
-    pillars: CreativeStrategyPillar[]
+    pillars: CreativeStrategyPillar[],
+    opts?: { product?: string; mission?: StrategyMission }
   ): Promise<BrandCreativeStrategy> {
     const dir = this.brandDir(slug);
     const strategy: BrandCreativeStrategy = {
+      product: opts?.product,
+      mission: opts?.mission,
       pillars,
       updated_at: new Date().toISOString(),
     };

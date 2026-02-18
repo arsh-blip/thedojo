@@ -27,6 +27,7 @@ import type {
   AngleRecommendation,
   ConceptSlideData,
   CreativeStrategyPillar,
+  StrategyMission,
 } from "./types.js";
 
 // Shared content block type used by analysis helpers and batch processing
@@ -779,15 +780,17 @@ Pass brand_slug to auto-load the brand's strategy, reviews, and top ads for cros
         const anglesFromPillars = (ctx.strategy?.pillars || []).map((p) => ({
           name: p.angle,
           description: p.description || "",
-          hooks: [p.example_ugc_hook, p.example_headline].filter(Boolean) as string[],
+          hooks: [...(p.example_ugc_hooks || [p.example_ugc_hook]), ...(p.example_headlines || [p.example_headline])].filter(Boolean) as string[],
         }));
 
         brandContext = {
           brand: ctx.profile.name,
-          product: ctx.profile.product,
+          product: ctx.strategy?.product || ctx.profile.product,
           targetAudience: ctx.profile.target_audience,
           angles: anglesFromPillars,
           strategyPillars: ctx.strategy?.pillars,
+          strategyProduct: ctx.strategy?.product,
+          strategyMission: ctx.strategy?.mission,
           reviews: ctx.reviews.map((r) => ({
             source: r.source,
             text: r.text,
@@ -1181,26 +1184,163 @@ const strategyPillarSchema = z.object({
   persona: z.string().default(""),
   angle: z.string(),
   sub_angles: z.array(z.string()).default([]),
+  sub_angle: z.string().optional(),
   primary_benefits: z.array(z.string()).default([]),
   description: z.string().default(""),
   emotional_fear: z.string().default(""),
-  problem_solution_promise: z.string().default(""),
-  before_after: z.string().default(""),
+  problem_solution_promise: z.union([
+    z.string(),
+    z.object({ problem: z.string(), solution: z.string(), promise: z.string() }),
+  ]).default(""),
+  before_after: z.union([
+    z.string(),
+    z.object({ before: z.string(), after: z.string() }),
+  ]).default(""),
   frameworks: z.array(z.string()).default([]),
   example_headline: z.string().default(""),
+  example_headlines: z.array(z.string()).optional(),
   example_testimonial: z.string().default(""),
   example_ugc_hook: z.string().default(""),
+  example_ugc_hooks: z.array(z.string()).optional(),
   key_points_framing: z.array(z.string()).default([]),
   objections: z.array(z.string()).default([]),
+  audience_persona: z.object({
+    type: z.string(),
+    awareness_level: z.string(),
+    priority: z.number(),
+    traits: z.array(z.string()).default([]),
+  }).optional(),
+  output_instructions: z.object({
+    emotional_drivers: z.array(z.string()),
+    headline_archetypes: z.array(z.string()),
+    meta_cognition_steps: z.array(z.string()),
+    format: z.string(),
+  }).optional(),
+  creative_inspiration: z.object({
+    reference_headlines: z.array(z.string()),
+    reference_testimonial: z.string(),
+    reference_ugc_hooks: z.array(z.string()),
+  }).optional(),
+  successful_formats: z.array(z.string()).optional(),
+  deliverable: z.string().optional(),
 });
+
+/**
+ * Auto-detect and transform rich keyed strategy JSON.
+ * Handles the format where top-level keys are pillar names (e.g., "RP-01: The Tractor Cab")
+ * and each value contains brand_context, audience_persona, mission, etc.
+ */
+function transformRichStrategyJson(
+  parsed: Record<string, unknown>
+): { pillars: CreativeStrategyPillar[]; product?: string; mission?: StrategyMission } {
+  const pillars: CreativeStrategyPillar[] = [];
+  let product: string | undefined;
+  let mission: StrategyMission | undefined;
+
+  for (const [key, value] of Object.entries(parsed)) {
+    const entry = value as Record<string, unknown>;
+    const bc = (entry.brand_context || {}) as Record<string, unknown>;
+    const ap = (entry.audience_persona || {}) as Record<string, unknown>;
+    const oi = (entry.output_instructions || {}) as Record<string, unknown>;
+    const ci = (entry.creative_inspiration || {}) as Record<string, unknown>;
+    const ms = (entry.mission || {}) as Record<string, unknown>;
+
+    // Extract shared product (same across all pillars)
+    if (!product && bc.product) {
+      product = bc.product as string;
+    }
+
+    // Extract shared mission (same across all pillars)
+    if (!mission && ms.goal) {
+      mission = {
+        goal: (ms.goal as string) || "",
+        requirements: (ms.requirements as string[]) || [],
+        negative_requirements: (ms.negative_requirements as string[]) || [],
+      };
+    }
+
+    // Parse primary_benefits from comma/dot-separated string to array
+    let primaryBenefits: string[] = [];
+    if (typeof bc.primary_benefits === "string") {
+      primaryBenefits = (bc.primary_benefits as string)
+        .split(/[·,]/)
+        .map((s: string) => s.trim())
+        .filter(Boolean);
+    } else if (Array.isArray(bc.primary_benefits)) {
+      primaryBenefits = bc.primary_benefits as string[];
+    }
+
+    const pillar: CreativeStrategyPillar = {
+      naming_convention: key,
+      priority: String(ap.priority ?? ""),
+      persona: (ap.type as string) || "",
+      angle: (bc.angle as string) || key,
+      sub_angles: bc.sub_angle ? [bc.sub_angle as string] : [],
+      sub_angle: (bc.sub_angle as string) || undefined,
+      primary_benefits: primaryBenefits,
+      description: (bc.emotional_fear as string) || "",
+      emotional_fear: (bc.emotional_fear as string) || "",
+      problem_solution_promise: bc.problem_solution_promise && typeof bc.problem_solution_promise === "object"
+        ? bc.problem_solution_promise as { problem: string; solution: string; promise: string }
+        : String(bc.problem_solution_promise || ""),
+      before_after: bc.before_after_framework && typeof bc.before_after_framework === "object"
+        ? bc.before_after_framework as { before: string; after: string }
+        : String(bc.before_after_framework || ""),
+      frameworks: (entry.references as string[]) || [],
+      example_headline: Array.isArray(bc.example_headlines) ? (bc.example_headlines as string[])[0] || "" : "",
+      example_headlines: Array.isArray(bc.example_headlines) ? bc.example_headlines as string[] : undefined,
+      example_testimonial: (bc.example_testimonial as string) || "",
+      example_ugc_hook: Array.isArray(bc.example_ugc_hooks) ? (bc.example_ugc_hooks as string[])[0] || "" : "",
+      example_ugc_hooks: Array.isArray(bc.example_ugc_hooks) ? bc.example_ugc_hooks as string[] : undefined,
+      key_points_framing: Array.isArray(bc.key_points) ? bc.key_points as string[] : [],
+      objections: Array.isArray(bc.objections) ? bc.objections as string[] : [],
+      audience_persona: ap.type ? {
+        type: (ap.type as string) || "",
+        awareness_level: (ap.awareness_level as string) || "",
+        priority: Number(ap.priority) || 0,
+        traits: (ap.traits as string[]) || [],
+      } : undefined,
+      output_instructions: oi.emotional_drivers ? {
+        emotional_drivers: (oi.emotional_drivers as string[]) || [],
+        headline_archetypes: (oi.headline_archetypes as string[]) || [],
+        meta_cognition_steps: (oi.meta_cognition_steps as string[]) || [],
+        format: (oi.format as string) || "",
+      } : undefined,
+      creative_inspiration: ci.reference_headlines ? {
+        reference_headlines: (ci.reference_headlines as string[]) || [],
+        reference_testimonial: (ci.reference_testimonial as string) || "",
+        reference_ugc_hooks: (ci.reference_ugc_hooks as string[]) || [],
+      } : undefined,
+      successful_formats: Array.isArray(bc.successful_formats) ? bc.successful_formats as string[] : undefined,
+      deliverable: (entry.deliverable as string) || undefined,
+    };
+
+    pillars.push(pillar);
+  }
+
+  return { pillars, product, mission };
+}
+
+/** Detect if an object is a rich keyed strategy (keys are pillar names with brand_context inside) */
+function isRichStrategyJson(obj: unknown): obj is Record<string, unknown> {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+  const entries = Object.values(obj as Record<string, unknown>);
+  if (entries.length === 0) return false;
+  // Check if the first entry has brand_context — signature of the rich format
+  const first = entries[0];
+  return !!first && typeof first === "object" && "brand_context" in (first as Record<string, unknown>);
+}
 
 server.tool(
   "import_brand_strategy",
   `Import a brand's creative strategy pillars from JSON.
-Each pillar maps to the standard columns: Naming Convention, Priority, Persona,
-Angle, Sub-Angles, Primary Benefits, Description, Emotional Fear,
-Problem>Solution>Promise, Before/After, Frameworks, Example Headline,
-Example Testimonial, Example UGC Hook, Key Points/Framing, Objections.
+
+Supports THREE formats:
+1. **Simple array** — array of pillar objects with standard columns
+2. **Wrapped object** — { pillars: [...] } or { product: "...", pillars: [...] }
+3. **Rich keyed format** — object where each key is a pillar name (e.g., "RP-01: The Tractor Cab")
+   containing brand_context, audience_persona, mission, output_instructions, creative_inspiration.
+   Automatically extracts product and mission requirements from this format.
 
 You can paste the JSON directly or provide a path to a local JSON file.
 The strategy is saved to the brand's folder and used to cross-reference
@@ -1215,8 +1355,12 @@ video analysis and ad copy generation.`,
       .string()
       .optional()
       .describe("Path to a local JSON file containing the pillars array"),
+    strategy_json: z
+      .string()
+      .optional()
+      .describe("Raw JSON string — supports all three formats including the rich keyed format"),
   },
-  async ({ brand_slug, pillars, json_file_path }) => {
+  async ({ brand_slug, pillars, json_file_path, strategy_json }) => {
     const profile = await brandStore.findBrand(brand_slug);
     if (!profile) {
       return {
@@ -1230,44 +1374,97 @@ video analysis and ad copy generation.`,
     }
 
     let data: CreativeStrategyPillar[];
+    let productName: string | undefined;
+    let missionData: StrategyMission | undefined;
 
     if (pillars && pillars.length > 0) {
       data = pillars as CreativeStrategyPillar[];
-    } else if (json_file_path) {
+    } else {
+      // Get raw JSON from file or string
+      let rawJson: string | undefined;
+      if (json_file_path) {
+        try {
+          rawJson = await import("fs/promises").then((f) =>
+            f.readFile(json_file_path, "utf-8")
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            content: [
+              { type: "text" as const, text: `Failed to read JSON file: ${msg}` },
+            ],
+          };
+        }
+      } else if (strategy_json) {
+        rawJson = strategy_json;
+      }
+
+      if (!rawJson) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Provide `pillars` (array), `json_file_path`, or `strategy_json` (raw JSON string).",
+            },
+          ],
+        };
+      }
+
       try {
-        const raw = await import("fs/promises").then((f) =>
-          f.readFile(json_file_path, "utf-8")
-        );
-        const parsed = JSON.parse(raw);
-        // Support both { pillars: [...] } and bare array
-        data = Array.isArray(parsed) ? parsed : parsed.pillars || [];
+        const parsed = JSON.parse(rawJson);
+
+        if (isRichStrategyJson(parsed)) {
+          // Rich keyed format — auto-transform
+          const result = transformRichStrategyJson(parsed);
+          data = result.pillars;
+          productName = result.product;
+          missionData = result.mission;
+        } else if (Array.isArray(parsed)) {
+          data = parsed;
+        } else {
+          // Wrapped object: { pillars: [...], product?: "..." }
+          data = parsed.pillars || [];
+          productName = parsed.product;
+          if (parsed.mission) {
+            missionData = parsed.mission as StrategyMission;
+          }
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return {
           content: [
-            { type: "text" as const, text: `Failed to read JSON file: ${msg}` },
+            { type: "text" as const, text: `Failed to parse JSON: ${msg}` },
           ],
         };
       }
-    } else {
+    }
+
+    if (data.length === 0) {
       return {
         content: [
-          {
-            type: "text" as const,
-            text: "Provide either `pillars` (JSON array) or `json_file_path`.",
-          },
+          { type: "text" as const, text: "No pillars found in the provided data." },
         ],
       };
     }
 
-    const strategy = await brandStore.importStrategy(profile.slug, data);
+    const strategy = await brandStore.importStrategy(profile.slug, data, {
+      product: productName,
+      mission: missionData,
+    });
 
     const summary = data
       .map(
         (p, i) =>
-          `${i + 1}. **${p.angle}** (${p.priority || "—"}) — ${p.persona || "General"}${p.sub_angles?.length ? `\n   Sub-angles: ${p.sub_angles.join(", ")}` : ""}`
+          `${i + 1}. **${p.angle}** (P${p.priority || "—"}) — ${p.persona || "General"}` +
+          (p.sub_angle ? `\n   Sub-angle: ${p.sub_angle}` : "") +
+          (p.sub_angles?.length ? `\n   Sub-angles: ${p.sub_angles.join(", ")}` : "") +
+          (p.audience_persona ? `\n   Audience: ${p.audience_persona.type} (${p.audience_persona.awareness_level})` : "")
       )
       .join("\n");
+
+    const extras: string[] = [];
+    if (productName) extras.push(`**Product:** ${productName}`);
+    if (missionData) extras.push(`**Mission:** ${missionData.goal.slice(0, 100)}...`);
 
     return {
       content: [
@@ -1275,13 +1472,14 @@ video analysis and ad copy generation.`,
           type: "text" as const,
           text: [
             `Strategy imported for **${profile.name}** — ${data.length} pillars.`,
+            extras.length ? extras.join("\n") : null,
             ``,
             `### Pillars`,
             summary,
             ``,
             `Saved to \`brands/${profile.slug}/strategy.json\`.`,
             `These pillars will be used to cross-reference video analysis and ad copy generation when you pass \`brand_slug: "${profile.slug}"\`.`,
-          ].join("\n"),
+          ].filter(Boolean).join("\n"),
         },
       ],
     };
@@ -1481,23 +1679,48 @@ Pass no brand_slug to list all available brands.`,
 
     // Strategy
     if (ctx.strategy && ctx.strategy.pillars.length > 0) {
-      sections.push(`\n### Creative Strategy (${ctx.strategy.pillars.length} pillars)`);
-      for (const p of ctx.strategy.pillars) {
+      const strat = ctx.strategy;
+      sections.push(`\n### Creative Strategy (${strat.pillars.length} pillars)`);
+      if (strat.product) sections.push(`**Product:** ${strat.product}`);
+      if (strat.mission) {
         sections.push(
-          `\n#### ${p.angle} (${p.priority || "—"})`,
+          `**Mission:** ${strat.mission.goal}`,
+          strat.mission.requirements.length ? `**Requirements:** ${strat.mission.requirements.join(" | ")}` : "",
+          strat.mission.negative_requirements.length ? `**Negative Requirements:** ${strat.mission.negative_requirements.join(" | ")}` : ""
+        );
+      }
+      for (const p of strat.pillars) {
+        // Format PSP — handle both string and object
+        let pspText: string;
+        if (typeof p.problem_solution_promise === "object") {
+          const psp = p.problem_solution_promise;
+          pspText = `Problem: ${psp.problem.slice(0, 150)}... → Solution: ${psp.solution.slice(0, 150)}... → Promise: ${psp.promise.slice(0, 150)}...`;
+        } else {
+          pspText = p.problem_solution_promise || "—";
+        }
+
+        // Format Before/After
+        let baText: string;
+        if (typeof p.before_after === "object") {
+          baText = `Before: ${p.before_after.before || "—"} → After: ${p.before_after.after || "—"}`;
+        } else {
+          baText = p.before_after || "—";
+        }
+
+        sections.push(
+          `\n#### ${p.naming_convention || p.angle} (P${p.priority || "—"})`,
+          `- **Angle:** ${p.angle}`,
+          p.sub_angle ? `- **Sub-Angle:** ${p.sub_angle}` : "",
           `- **Persona:** ${p.persona || "—"}`,
-          `- **Description:** ${p.description || "—"}`,
-          p.sub_angles.length ? `- **Sub-Angles:** ${p.sub_angles.join(", ")}` : "",
+          p.audience_persona ? `- **Audience:** ${p.audience_persona.type} (${p.audience_persona.awareness_level})` : "",
           p.primary_benefits.length
             ? `- **Benefits:** ${p.primary_benefits.join(", ")}`
             : "",
           `- **Emotional Fear:** ${p.emotional_fear || "—"}`,
-          `- **Problem > Solution > Promise:** ${p.problem_solution_promise || "—"}`,
-          `- **Before/After:** ${p.before_after || "—"}`,
-          p.frameworks.length ? `- **Frameworks:** ${p.frameworks.join(", ")}` : "",
-          `- **Example Headline:** ${p.example_headline || "—"}`,
-          `- **Example Testimonial:** ${p.example_testimonial || "—"}`,
-          `- **Example UGC Hook:** ${p.example_ugc_hook || "—"}`,
+          `- **P>S>P:** ${pspText}`,
+          `- **Before/After:** ${baText}`,
+          `- **Example Headline:** ${(p.example_headlines || [p.example_headline]).filter(Boolean)[0] || "—"}`,
+          `- **Example UGC Hook:** ${(p.example_ugc_hooks || [p.example_ugc_hook]).filter(Boolean)[0] || "—"}`,
           p.key_points_framing.length
             ? `- **Key Points:** ${p.key_points_framing.join("; ")}`
             : "",
@@ -1576,6 +1799,8 @@ interface AnalysisBrandContext {
   targetAudience?: string;
   angles: { name: string; description: string; hooks: string[] }[];
   strategyPillars?: CreativeStrategyPillar[];
+  strategyProduct?: string;
+  strategyMission?: StrategyMission;
   reviews?: { source: string; text: string; themes?: string[] }[];
   topAds?: {
     brand_source: string;
@@ -1763,21 +1988,49 @@ async function analyzeVideoCore(
   // Strategy pillars deep context (when loaded from brand store)
   if (opts.brandContext?.strategyPillars && opts.brandContext.strategyPillars.length > 0) {
     const bc = opts.brandContext;
+
+    // Show product + mission if available
+    const strategyHeader: string[] = [``, `### Strategy Pillars — ${bc.brand}`];
+    if (bc.strategyProduct) strategyHeader.push(`**Product:** ${bc.strategyProduct}`);
+    if (bc.strategyMission) {
+      strategyHeader.push(
+        `**Mission:** ${bc.strategyMission.goal}`,
+        `**Requirements:** ${bc.strategyMission.requirements.join(" | ")}`,
+        `**Negative Requirements:** ${bc.strategyMission.negative_requirements.join(" | ")}`
+      );
+    }
+
     const pillarSummary = bc.strategyPillars!
-      .map(
-        (p) =>
-          `- **${p.angle}** (${p.priority || "—"}): ${p.description || "—"}\n` +
-          `  Fear: ${p.emotional_fear || "—"} | P>S>P: ${p.problem_solution_promise || "—"}\n` +
-          `  Example hook: "${p.example_ugc_hook || p.example_headline || "—"}"\n` +
-          `  Frameworks: ${p.frameworks.length ? p.frameworks.join(", ") : "—"}`
-      )
-      .join("\n");
+      .map((p) => {
+        // Format P>S>P
+        let pspLine: string;
+        if (typeof p.problem_solution_promise === "object") {
+          const psp = p.problem_solution_promise;
+          pspLine = `Problem: ${psp.problem.slice(0, 100)}... → Promise: ${psp.promise.slice(0, 100)}...`;
+        } else {
+          pspLine = p.problem_solution_promise || "—";
+        }
+
+        const hookExamples = (p.example_ugc_hooks || [p.example_ugc_hook]).filter(Boolean);
+
+        return [
+          `- **${p.naming_convention || p.angle}** (P${p.priority || "—"})${p.sub_angle ? ` — ${p.sub_angle}` : ""}`,
+          `  Persona: ${p.persona || "—"}${p.audience_persona ? ` | Awareness: ${p.audience_persona.awareness_level}` : ""}`,
+          `  Fear: ${p.emotional_fear ? p.emotional_fear.slice(0, 150) + "..." : "—"}`,
+          `  P>S>P: ${pspLine}`,
+          `  Hook: "${hookExamples[0]?.slice(0, 150) || p.example_headline || "—"}..."`,
+          p.key_points_framing.length ? `  Key: ${p.key_points_framing[0]?.slice(0, 100)}...` : "",
+          p.output_instructions?.emotional_drivers?.length
+            ? `  Emotional Drivers: ${p.output_instructions.emotional_drivers.join(", ")}`
+            : "",
+        ].filter(Boolean).join("\n");
+      })
+      .join("\n\n");
 
     content.push({
       type: "text",
       text: [
-        ``,
-        `### Strategy Pillars — ${bc.brand}`,
+        ...strategyHeader,
         ``,
         pillarSummary,
         ``,
@@ -1786,6 +2039,8 @@ async function analyzeVideoCore(
         `- Which pillar's **Problem>Solution>Promise** framework does this video follow?`,
         `- Could this video's hook be adapted as a **UGC hook** for any of the pillars?`,
         `- Which **objections** from the pillars does this video address (or fail to address)?`,
+        `- Which **audience persona** does this video most speak to?`,
+        `- Rate this video against each pillar's **key points/framing** — which are present, which are missing?`,
       ].join("\n"),
     });
   }
@@ -1970,7 +2225,7 @@ Accepts a mix of sources (URLs, Google Drive files, local paths).`,
         const anglesFromPillars = (ctx.strategy?.pillars || []).map((p) => ({
           name: p.angle,
           description: p.description || "",
-          hooks: [p.example_ugc_hook, p.example_headline].filter(Boolean) as string[],
+          hooks: [...(p.example_ugc_hooks || [p.example_ugc_hook]), ...(p.example_headlines || [p.example_headline])].filter(Boolean) as string[],
         }));
 
         // Merge inline angles with pillar-derived angles (inline takes priority)
@@ -1981,10 +2236,12 @@ Accepts a mix of sources (URLs, Google Drive files, local paths).`,
 
         brandContext = {
           brand: ctx.profile.name,
-          product: product || ctx.profile.product,
+          product: product || ctx.strategy?.product || ctx.profile.product,
           targetAudience: target_audience || ctx.profile.target_audience,
           angles: allAngles,
           strategyPillars: ctx.strategy?.pillars,
+          strategyProduct: ctx.strategy?.product,
+          strategyMission: ctx.strategy?.mission,
           reviews: ctx.reviews.map((r) => ({
             source: r.source,
             text: r.text,
