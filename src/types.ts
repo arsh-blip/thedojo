@@ -85,3 +85,54 @@ export interface ConceptSlideData {
   target_audience: string;
   key_messaging_points: string[];
 }
+
+// ── Video Analysis Types ─────────────────────────────────────────────
+
+export interface VideoMetadata {
+  duration: number;
+  width: number;
+  height: number;
+  fps: number;
+  codec: string;
+  fileSize: number;
+  format: string;
+  hasAudio: boolean;
+}
+
+export interface ExtractedFrame {
+  timestamp: number;
+  base64: string;
+  isSceneChange: boolean;
+}
+
+export interface SceneSegment {
+  startTime: number;
+  endTime: number;
+  duration: number;
+}
+
+export interface TranscriptSegment {
+  text: string;
+  startTime: number;
+  endTime: number;
+}
+
+// ── Concept Session Types (Iterative Refinement) ─────────────────────
+
+export interface ConceptIteration {
+  iterationNumber: number;
+  concept: string;
+  feedback?: string;
+  timestamp: Date;
+}
+
+export interface ConceptSession {
+  id: string;
+  videoId: string;
+  brand: string;
+  product?: string;
+  targetAudience?: string;
+  videoAnalysisSummary: string;
+  iterations: ConceptIteration[];
+  createdAt: Date;
+}

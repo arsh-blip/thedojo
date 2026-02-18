@@ -93,6 +93,30 @@ export class GoogleDriveService {
     return response.data as string;
   }
 
+  /**
+   * Download a binary file from Google Drive (videos, images, etc.).
+   * Returns the raw buffer along with file metadata.
+   */
+  async downloadFile(
+    fileId: string
+  ): Promise<{ buffer: Buffer; name: string; mimeType: string }> {
+    const metadata = await this.drive.files.get({
+      fileId,
+      fields: "name, mimeType",
+    });
+
+    const response = await this.drive.files.get(
+      { fileId, alt: "media" },
+      { responseType: "arraybuffer" }
+    );
+
+    return {
+      buffer: Buffer.from(response.data as ArrayBuffer),
+      name: metadata.data.name || "video",
+      mimeType: metadata.data.mimeType || "video/mp4",
+    };
+  }
+
   async parseMessagingDocument(fileId: string): Promise<MessagingDocument> {
     const content = await this.getDocumentContent(fileId);
 
