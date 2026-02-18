@@ -15,6 +15,7 @@ import { brandStore } from "./services/brand-store.js";
 import {
   renderCreativeGuidelines,
   renderTeardownGuidelines,
+  renderImagePromptGuidelines,
 } from "./services/creative-guidelines.js";
 import {
   processBatch,
@@ -2773,12 +2774,136 @@ server.tool(
   "generate_ad_image",
   `Generate ad creative images using Google's Nano Banana Pro (Gemini 3 Pro Image).
 Creates high-quality product shots, lifestyle imagery, text overlays, and ad mockups.
+
+DESIGNER WORKFLOW (follow this when building prompts):
+1. Start with the creative concept or reference ad inspiration — what visual are you trying to create?
+2. Describe the image in detail: subject, environment, composition, mood.
+3. Layer in art direction: camera angle, lens type, lighting setup, color palette.
+4. Refine the prompt for Nano Banana Pro — be specific, use photographic language, avoid vague terms.
+   Claude (Opus 4.6) should refine and optimize prompts before sending to the model.
+5. Generate at 1K for quick drafts, then regenerate winners at 2K or 4K.
+
 Supports reference image input for style-matching and editing. Returns the generated image.`,
   {
     prompt: z
       .string()
       .describe(
-        "Detailed image generation prompt. Be specific about composition, lighting, style, text overlays, and mood. E.g. 'A hero product shot of a skincare serum bottle on a marble surface, golden hour lighting, soft shadows, editorial beauty photography, text overlay reading GLOW FROM WITHIN'"
+        "Detailed image generation prompt. Be specific about composition, lighting, style, text overlays, and mood. E.g. 'A hero product shot of a skincare serum bottle on a marble surface, golden hour side lighting, 85mm lens, shallow depth of field, soft shadows, editorial beauty photography, text overlay reading GLOW FROM WITHIN'"
+      ),
+    camera_angle: z
+      .enum([
+        "top_down_90",
+        "birds_eye_65",
+        "high_angle_45",
+        "above_30",
+        "slightly_above_15",
+        "straight_on_0",
+        "hero_view_neg15",
+        "low_view_neg45",
+        "worms_eye_neg75",
+      ])
+      .optional()
+      .describe(
+        "Product photography camera angle. " +
+        "top_down_90: flat lay / knolling (90°). " +
+        "birds_eye_65: elevated overview (65°). " +
+        "high_angle_45: standard product hero (45°). " +
+        "above_30: slight elevation (30°). " +
+        "slightly_above_15: eye-level with tilt (15°). " +
+        "straight_on_0: dead-on eye level (0°). " +
+        "hero_view_neg15: power/aspirational shot (-15°). " +
+        "low_view_neg45: dramatic upward angle (-45°). " +
+        "worms_eye_neg75: extreme low, towering effect (-75°)."
+      ),
+    shot_type: z
+      .enum([
+        "establishing",
+        "wide",
+        "medium",
+        "close_up",
+        "extreme_close_up",
+        "cut_away",
+        "two_shot",
+        "over_the_shoulder",
+        "point_of_view",
+        "perspective",
+      ])
+      .optional()
+      .describe(
+        "Cinematography shot type. " +
+        "establishing: sets the scene/environment. " +
+        "wide: full subject in environment. " +
+        "medium: subject from waist up or product in context. " +
+        "close_up: tight on subject/product, detail-focused. " +
+        "extreme_close_up: macro detail (texture, ingredients, droplet). " +
+        "cut_away: detail insert showing a specific element. " +
+        "two_shot: two subjects/products in frame. " +
+        "over_the_shoulder: from behind a person looking at product. " +
+        "point_of_view: first-person perspective (hands holding product). " +
+        "perspective: vanishing point / depth composition."
+      ),
+    lens: z
+      .enum([
+        "24mm_wide",
+        "35mm_standard_wide",
+        "50mm_standard",
+        "85mm_portrait",
+        "100mm_macro",
+        "135mm_telephoto",
+        "200mm_compressed",
+      ])
+      .optional()
+      .describe(
+        "Lens focal length / look. " +
+        "24mm_wide: environmental context, slight distortion, epic feel. " +
+        "35mm_standard_wide: natural perspective, lifestyle shots. " +
+        "50mm_standard: closest to human eye, versatile. " +
+        "85mm_portrait: classic beauty/portrait lens, creamy bokeh. " +
+        "100mm_macro: extreme detail, textures, ingredient close-ups. " +
+        "135mm_telephoto: compressed background, dreamy separation. " +
+        "200mm_compressed: maximum background compression, surreal bokeh."
+      ),
+    lighting: z
+      .enum([
+        "golden_hour",
+        "soft_natural",
+        "studio_softbox",
+        "hard_direct",
+        "backlit_rim",
+        "flat_lay_even",
+        "dramatic_chiaroscuro",
+        "neon_colored",
+        "overcast_diffused",
+      ])
+      .optional()
+      .describe(
+        "Lighting setup. " +
+        "golden_hour: warm, directional, aspirational. " +
+        "soft_natural: window light, organic, approachable. " +
+        "studio_softbox: clean, controlled, e-commerce quality. " +
+        "hard_direct: sharp shadows, editorial, bold. " +
+        "backlit_rim: glowing edges, premium, ethereal. " +
+        "flat_lay_even: uniform, shadow-free, knolling/flat lay. " +
+        "dramatic_chiaroscuro: deep contrast, luxury, moody. " +
+        "neon_colored: creative, Gen Z, bold color accents. " +
+        "overcast_diffused: soft, no harsh shadows, natural beauty."
+      ),
+    art_direction_notes: z
+      .string()
+      .optional()
+      .describe(
+        "Free-form art direction notes: color palette, texture, mood board keywords, styling details, " +
+        "prop placement, background treatment. E.g. 'warm earth tones, linen texture backdrop, " +
+        "scattered botanicals, dewy skin finish, minimalist clean aesthetic'"
+      ),
+    reference_ad_context: z
+      .string()
+      .optional()
+      .describe(
+        "Reference ad inspiration. Paste the output from search_reference_ads or analyze_image_ad, " +
+        "or describe the reference ad you want to draw inspiration from. E.g. 'Glossier Boy Brow ad — " +
+        "clean white background, model applying product in mirror, soft natural lighting, UGC feel, " +
+        "minimal text overlay with product name only'"
       ),
     aspect_ratio: z
       .enum(["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9"])
@@ -2794,7 +2919,9 @@ Supports reference image input for style-matching and editing. Returns the gener
       .string()
       .optional()
       .describe(
-        "Optional base64-encoded reference image for style-matching or editing. Use with prompts like 'Edit this image to add a text overlay' or 'Generate a similar product shot in this style'"
+        "Optional base64-encoded reference/inspiration image for style-matching or editing. " +
+        "The designer workflow: find visual inspiration (Google, Pinterest, competitor ads), " +
+        "then pass it here so Nano Banana Pro can match the style, composition, or mood."
       ),
     reference_image_mime_type: z
       .string()
@@ -2809,36 +2936,124 @@ Supports reference image input for style-matching and editing. Returns the gener
   async (params) => {
     const service = getGoogleAIStudioService();
 
-    // If brand context is requested, prepend it to the prompt
-    let finalPrompt = params.prompt;
+    // ── Build the art-directed prompt ────────────────────────────────
+    // Follows the designer workflow: concept → description → art direction → refinement
+
+    const promptParts: string[] = [];
+
+    // 1. Reference ad context (inspiration layer)
+    if (params.reference_ad_context) {
+      promptParts.push(
+        `Reference inspiration: ${params.reference_ad_context}`
+      );
+    }
+
+    // 2. Core creative prompt
+    promptParts.push(params.prompt);
+
+    // 3. Camera angle
+    if (params.camera_angle) {
+      const angleLabels: Record<string, string> = {
+        top_down_90: "top-down flat lay shot at 90 degrees",
+        birds_eye_65: "bird's eye view at approximately 65 degrees",
+        high_angle_45: "high angle shot at 45 degrees",
+        above_30: "slightly elevated angle at 30 degrees above eye level",
+        slightly_above_15: "subtle overhead tilt at 15 degrees",
+        straight_on_0: "straight-on eye-level angle",
+        hero_view_neg15: "hero view from slightly below at -15 degrees, conveying power and aspiration",
+        low_view_neg45: "dramatic low angle at -45 degrees looking upward",
+        worms_eye_neg75: "extreme low worm's-eye view at -75 degrees",
+      };
+      promptParts.push(`Camera angle: ${angleLabels[params.camera_angle]}`);
+    }
+
+    // 4. Shot type
+    if (params.shot_type) {
+      const shotLabels: Record<string, string> = {
+        establishing: "establishing shot showing the full scene and environment",
+        wide: "wide shot with subject fully visible in the environment",
+        medium: "medium shot framing the subject from waist up or product in context",
+        close_up: "close-up shot focused tightly on the subject or product",
+        extreme_close_up: "extreme close-up macro shot revealing fine texture and detail",
+        cut_away: "cut-away insert shot highlighting a specific detail element",
+        two_shot: "two-shot composition with two subjects or products in frame",
+        over_the_shoulder: "over-the-shoulder shot looking past a person toward the product",
+        point_of_view: "first-person point-of-view shot as if the viewer is holding or using the product",
+        perspective: "perspective composition with vanishing point depth",
+      };
+      promptParts.push(`Shot type: ${shotLabels[params.shot_type]}`);
+    }
+
+    // 5. Lens
+    if (params.lens) {
+      const lensLabels: Record<string, string> = {
+        "24mm_wide": "shot on 24mm wide-angle lens with environmental depth and slight barrel distortion",
+        "35mm_standard_wide": "shot on 35mm lens with natural perspective",
+        "50mm_standard": "shot on 50mm standard lens, closest to human-eye perspective",
+        "85mm_portrait": "shot on 85mm portrait lens with beautiful creamy bokeh and subject isolation",
+        "100mm_macro": "shot on 100mm macro lens with extreme detail and shallow plane of focus",
+        "135mm_telephoto": "shot on 135mm telephoto lens with compressed background and dreamy separation",
+        "200mm_compressed": "shot on 200mm telephoto with maximum background compression and surreal bokeh",
+      };
+      promptParts.push(lensLabels[params.lens]);
+    }
+
+    // 6. Lighting
+    if (params.lighting) {
+      const lightLabels: Record<string, string> = {
+        golden_hour: "golden hour warm directional sunlight with long soft shadows",
+        soft_natural: "soft natural window light, organic and approachable",
+        studio_softbox: "clean studio softbox lighting, controlled and even",
+        hard_direct: "hard direct lighting with sharp defined shadows, editorial feel",
+        backlit_rim: "backlit with rim lighting creating a glowing ethereal edge around the subject",
+        flat_lay_even: "even overhead lighting with no shadows, perfect for flat lay",
+        dramatic_chiaroscuro: "dramatic chiaroscuro lighting with deep contrast between light and shadow",
+        neon_colored: "colored neon accent lighting with bold creative color cast",
+        overcast_diffused: "soft overcast diffused lighting, no harsh shadows",
+      };
+      promptParts.push(`Lighting: ${lightLabels[params.lighting]}`);
+    }
+
+    // 7. Art direction notes
+    if (params.art_direction_notes) {
+      promptParts.push(`Art direction: ${params.art_direction_notes}`);
+    }
+
+    // 8. Brand context
     if (params.brand_slug) {
       const ctx = await brandStore.getFullContext(params.brand_slug);
       if (ctx) {
         const brandContext = [
           `Brand: ${ctx.profile.name}`,
           ctx.profile.brand_voice
-            ? `Voice: ${ctx.profile.brand_voice.tone}, ${ctx.profile.brand_voice.style}`
+            ? `Brand voice: ${ctx.profile.brand_voice.tone}, ${ctx.profile.brand_voice.style}`
             : "",
           ctx.profile.target_audience
-            ? `Target Audience: ${ctx.profile.target_audience}`
+            ? `Target audience: ${ctx.profile.target_audience}`
             : "",
         ]
           .filter(Boolean)
           .join(". ");
-        finalPrompt = `${brandContext}.\n\n${params.prompt}`;
+        promptParts.push(brandContext);
       }
     }
 
+    // 9. Nano Banana Pro optimization suffix
+    promptParts.push(
+      "Photorealistic, high production value, professional advertising photography."
+    );
+
+    const finalPrompt = promptParts.join(". ");
+
     // Build reference images array
-    const referenceImages =
-      params.reference_image_base64
-        ? [
-            {
-              base64: params.reference_image_base64,
-              mimeType: params.reference_image_mime_type || "image/jpeg",
-            },
-          ]
-        : undefined;
+    const referenceImages = params.reference_image_base64
+      ? [
+          {
+            base64: params.reference_image_base64,
+            mimeType: params.reference_image_mime_type || "image/jpeg",
+          },
+        ]
+      : undefined;
 
     const result = await service.generateImage({
       prompt: finalPrompt,
@@ -2859,16 +3074,40 @@ Supports reference image input for style-matching and editing. Returns the gener
       mimeType: result.mimeType,
     });
 
+    // Build art direction summary for the response
+    const artDirectionSummary = [
+      params.camera_angle ? `Camera: ${params.camera_angle.replace(/_/g, " ")}` : "",
+      params.shot_type ? `Shot: ${params.shot_type.replace(/_/g, " ")}` : "",
+      params.lens ? `Lens: ${params.lens.replace(/_/g, " ")}` : "",
+      params.lighting ? `Lighting: ${params.lighting.replace(/_/g, " ")}` : "",
+    ].filter(Boolean);
+
     content.push({
       type: "text",
       text: [
         `**Image Generated** (Nano Banana Pro)`,
         `- Aspect Ratio: ${params.aspect_ratio || "1:1"}`,
         `- Resolution: ${params.image_size || "2K"}`,
-        `- Prompt: ${params.prompt.slice(0, 200)}${params.prompt.length > 200 ? "..." : ""}`,
+        artDirectionSummary.length
+          ? `- Art Direction: ${artDirectionSummary.join(" | ")}`
+          : "",
+        params.art_direction_notes
+          ? `- Notes: ${params.art_direction_notes.slice(0, 150)}${params.art_direction_notes.length > 150 ? "..." : ""}`
+          : "",
+        params.reference_ad_context
+          ? `- Reference Ad: ${params.reference_ad_context.slice(0, 150)}${params.reference_ad_context.length > 150 ? "..." : ""}`
+          : "",
         params.reference_image_base64
           ? `- Reference image provided for style-matching`
           : "",
+        ``,
+        `**Refined Prompt Sent:**`,
+        `\`\`\``,
+        finalPrompt.slice(0, 500) + (finalPrompt.length > 500 ? "..." : ""),
+        `\`\`\``,
+        ``,
+        `**Next steps:** If the result is close, refine the prompt or art direction params and regenerate. ` +
+        `Once approved, regenerate at 4K for final assets.`,
       ]
         .filter(Boolean)
         .join("\n"),

@@ -101,9 +101,32 @@ For generating ad creative assets (images and video) using Google AI Studio:
 
 ### Generate Ad Images (Nano Banana Pro)
 Use `generate_ad_image` to create ad creative images — product shots, lifestyle imagery,
-text overlay compositions, and ad mockups. Supports reference image input for style-matching.
+text overlay compositions, and ad mockups.
 
-Example: "Generate a hero product shot of a moisturizer on marble, golden hour lighting, 4:5 aspect ratio for Instagram feed"
+**Designer Prompt Workflow** (follow this process when generating images):
+
+1. **Gather Inspiration:** Ask for reference ad inspiration — competitor ads, Pinterest boards,
+   or use `search_reference_ads` / `analyze_image_ad` output. If they have a reference image,
+   pass it as `reference_image_base64` for style-matching.
+2. **Describe the Vision:** Describe (or have Claude Opus 4.6 describe) the reference image in detail —
+   subject, environment, composition, colors, textures, mood, and story.
+3. **Art Direct the Shot:** Layer in structured art direction parameters:
+   - **Camera Angle:** top_down_90, birds_eye_65, high_angle_45, above_30, slightly_above_15,
+     straight_on_0, hero_view_neg15, low_view_neg45, worms_eye_neg75
+   - **Shot Type:** establishing, wide, medium, close_up, extreme_close_up, cut_away, two_shot,
+     over_the_shoulder, point_of_view, perspective
+   - **Lens:** 24mm_wide, 35mm_standard_wide, 50mm_standard, 85mm_portrait, 100mm_macro,
+     135mm_telephoto, 200mm_compressed
+   - **Lighting:** golden_hour, soft_natural, studio_softbox, hard_direct, backlit_rim,
+     flat_lay_even, dramatic_chiaroscuro, neon_colored, overcast_diffused
+   - **Art Direction Notes:** free-form (color palette, textures, props, styling, mood)
+4. **Refine for Nano Banana Pro:** Use Claude (Opus 4.6) to refine and optimize the prompt —
+   be specific, use photographic language, avoid vague terms. The tool auto-appends quality anchors.
+5. **Iterate:** Generate at 1K for fast drafts. Review, adjust, regenerate. Lock winners at 2K/4K.
+
+Example: "Generate a hero product shot of a moisturizer on marble, hero_view camera angle,
+85mm portrait lens, golden hour lighting, art direction: warm earth tones, dewy texture finish,
+scattered botanicals as props, 4:5 aspect ratio for Instagram feed"
 
 ### Generate Ad Videos (Veo 3.1)
 Use `generate_ad_video` to create short video clips — product demos, B-roll, UGC-style content,
@@ -116,12 +139,17 @@ Two model variants:
 - **Fast** (`veo-3.1-fast-generate-preview`): 2x faster, ~1/5 cost, best for drafts and iteration
 
 ### End-to-End Creative Generation Flow
-1. Analyze reference ads with `search_reference_ads` + `analyze_image_ad` / `analyze_video`
-2. Write ad copy with `write_ad_copy`
-3. Generate visual concept drafts with `generate_ad_image` (use fast iteration with 1K resolution)
-4. Generate video clips with `generate_ad_video` (use `fast` model for drafts)
-5. Review generated assets, refine prompts, and regenerate at higher quality
-6. Push finalized concepts to Google Slides with `update_concept_slides`
+1. **Reference & Inspiration:** Find reference ads with `search_reference_ads`, tear them down with
+   `analyze_image_ad` / `analyze_video`. Ask the designer for any additional visual inspiration
+   (Pinterest, Google Images, competitor ads). Pass reference images directly into `generate_ad_image`.
+2. **Describe & Art Direct:** Use Claude (Opus 4.6) to describe the reference in photographic detail,
+   then layer in camera angle, shot type, lens, lighting, and art direction notes.
+3. **Write Ad Copy:** Generate copy variations with `write_ad_copy`.
+4. **Generate Image Drafts:** Use `generate_ad_image` at 1K resolution for rapid iteration.
+   Refine the prompt, adjust art direction params, and regenerate until the concept is locked.
+5. **Generate Video Clips:** Use `generate_ad_video` with `fast` model for draft iterations.
+6. **Finalize:** Regenerate approved concepts at 2K/4K (images) or standard model (video).
+7. **Publish:** Push finalized concepts to Google Slides with `update_concept_slides`.
 
 ### Requirements
 - **GOOGLE_AI_STUDIO_API_KEY** must be set (get from [aistudio.google.com](https://aistudio.google.com))
