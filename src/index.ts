@@ -11,12 +11,22 @@ import {
 } from "./services/video-processing.js";
 import { TranscriptionService } from "./services/transcription.js";
 import { conceptSessions } from "./services/concept-session.js";
+import {
+  processBatch,
+  type VideoSource,
+  type BatchItemResult,
+} from "./services/video-queue.js";
 import type {
   FacebookAd,
   AdCopy,
   AngleRecommendation,
   ConceptSlideData,
 } from "./types.js";
+
+// Shared content block type used by analysis helpers and batch processing
+type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
 
 // ── Initialize services ─────────────────────────────────────────────
 
@@ -1220,6 +1230,333 @@ concept evolution or resuming a refinement session.`,
         },
       ],
     };
+  }
+);
+
+// ── Batch helpers (shared by batch_analyze_videos) ───────────────────
+
+async function ingestVideoFromSource(
+  source: VideoSource
+): Promise<{ videoId: string }> {
+  const video = getVideoProcessingService();
+
+  if (source.type === "url") {
+    const r = await video.ingestFromUrl(source.url);
+    return { videoId: r.videoId };
+  } else if (source.type === "google_drive") {
+    let driveFileId = source.file_id;
+    const m = source.file_id.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    if (m) driveFileId = m[1];
+    const drive = getGoogleDriveService();
+    const { buffer, name } = await drive.downloadFile(driveFileId);
+    const ext = name.match(/\.\w+$/)?.[0] || ".mp4";
+    const r = await video.ingestFromBuffer(buffer, ext);
+    return { videoId: r.videoId };
+  } else {
+    const r = await video.ingestFromLocal(source.local_path);
+    return { videoId: r.videoId };
+  }
+}
+
+async function analyzeVideoCore(
+  videoId: string,
+  opts: {
+    includeTranscript: boolean;
+    sceneThreshold: number;
+    maxFrames: number;
+  }
+): Promise<ContentBlock[]> {
+  const stored = getStoredVideo(videoId);
+  if (!stored) {
+    return [
+      { type: "text", text: `Video ID "${videoId}" not found.` },
+    ];
+  }
+
+  const video = getVideoProcessingService();
+  const { videoPath, metadata } = stored;
+  const content: ContentBlock[] = [];
+
+  const dur = `${Math.floor(metadata.duration / 60)}:${String(Math.floor(metadata.duration % 60)).padStart(2, "0")}`;
+  content.push({
+    type: "text",
+    text: `## Video Analysis — \`${videoId}\`\nDuration: ${dur} | ${metadata.width}×${metadata.height} | ${metadata.fps} fps | ${metadata.codec}\n`,
+  });
+
+  // Scene-change frame extraction
+  let sceneResult;
+  try {
+    sceneResult = await video.extractSceneFrames(
+      videoPath,
+      opts.sceneThreshold,
+      opts.maxFrames
+    );
+  } catch {
+    sceneResult = null;
+  }
+
+  if (sceneResult && sceneResult.frames.length > 0) {
+    content.push({
+      type: "text",
+      text: `### Scene Structure (${sceneResult.scenes.length} scenes detected)\n\nKey frames at scene boundaries:\n`,
+    });
+    for (let i = 0; i < sceneResult.frames.length; i++) {
+      const frame = sceneResult.frames[i];
+      const scene = sceneResult.scenes[i];
+      const ts = frame.timestamp;
+      const tsFmt = `${Math.floor(ts / 60)}:${String(Math.floor(ts % 60)).padStart(2, "0")}`;
+      if (scene) {
+        const endFmt = `${Math.floor(scene.endTime / 60)}:${String(Math.floor(scene.endTime % 60)).padStart(2, "0")}`;
+        content.push({ type: "text", text: `**Scene ${i + 1}** — ${tsFmt} to ${endFmt} (${scene.duration.toFixed(1)}s)` });
+      } else {
+        content.push({ type: "text", text: `**Frame at ${tsFmt}**` });
+      }
+      content.push({ type: "image", data: frame.base64, mimeType: "image/jpeg" });
+    }
+  } else {
+    const interval = Math.max(1, Math.ceil(metadata.duration / opts.maxFrames));
+    const intervalFrames = await video.extractFrames(videoPath, interval, opts.maxFrames);
+    content.push({ type: "text", text: `### Key Frames (${intervalFrames.length} frames, every ${interval}s)\n` });
+    for (const frame of intervalFrames) {
+      const tsFmt = `${Math.floor(frame.timestamp / 60)}:${String(Math.floor(frame.timestamp % 60)).padStart(2, "0")}`;
+      content.push({ type: "text", text: `**${tsFmt}**` });
+      content.push({ type: "image", data: frame.base64, mimeType: "image/jpeg" });
+    }
+  }
+
+  // Transcript
+  if (opts.includeTranscript && metadata.hasAudio) {
+    try {
+      const audioPath = await video.extractAudio(videoPath);
+      const transcription = getTranscriptionService();
+      const result = await transcription.transcribe(audioPath);
+      if (result.transcript) {
+        const lines = result.segments.map((s) => {
+          const st = `${Math.floor(s.startTime / 60)}:${String(Math.floor(s.startTime % 60)).padStart(2, "0")}`;
+          const en = `${Math.floor(s.endTime / 60)}:${String(Math.floor(s.endTime % 60)).padStart(2, "0")}`;
+          return `[${st}–${en}] ${s.text}`;
+        });
+        content.push({ type: "text", text: `\n### Transcript\n\n${lines.join("\n")}\n\n**Full transcript:** ${result.transcript}` });
+      } else {
+        content.push({ type: "text", text: `\n### Transcript\nNo speech detected in the audio track.` });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      content.push({ type: "text", text: `\n### Transcript\nTranscription unavailable: ${msg}` });
+    }
+  } else if (!metadata.hasAudio) {
+    content.push({ type: "text", text: `\n### Transcript\nNo audio track detected in this video.` });
+  }
+
+  // Structured video summary
+  content.push({
+    type: "text",
+    text: [
+      ``,
+      `### Video Summary`,
+      ``,
+      `Fill in the following structured fields based on the frames and transcript above:`,
+      ``,
+      `| Field | Value |`,
+      `|-------|-------|`,
+      `| **Title** | _Identify the ad title from text overlays, voiceover, or context_ |`,
+      `| **Duration** | ${dur} (${metadata.duration.toFixed(1)}s) |`,
+      `| **Caption Status** | _Are on-screen text captions/supers present? (Yes with burned-in / Yes with platform captions / No captions detected)_ |`,
+      `| **Caption Text Samples** | _List the first 2-3 on-screen text overlays or caption lines verbatim_ |`,
+      `| **B-Roll Detected** | _Is there B-roll footage? (Yes / No) — describe any supplemental footage vs. primary action_ |`,
+      `| **Notes** | _Any notable production details: transitions, music style, aspect ratio choices, platform-specific formatting_ |`,
+    ].join("\n"),
+  });
+
+  // Creative teardown prompt
+  content.push({
+    type: "text",
+    text: [
+      ``,
+      `### Creative Teardown Instructions`,
+      ``,
+      `Perform a full creative teardown of this video ad:`,
+      ``,
+      `1. **Hook Analysis** (first 3s): What grabs attention? Visual hook, text overlay, movement, audio?`,
+      `2. **Visual Storytelling Arc**: How does the visual narrative progress?`,
+      `3. **Scene Structure & Pacing**: Which scenes are longest/shortest? How does pacing drive engagement?`,
+      `4. **Text Overlays & Graphics**: On-screen text, supers, graphic elements — when do they appear?`,
+      `5. **Product Presentation**: When/how is the product shown? Lifestyle vs. product-focused vs. UGC?`,
+      `6. **CTA Execution**: How does the ad close? What CTA is used and how?`,
+      `7. **Target Audience Signals**: Who is this for? Visual/copy cues indicating target demo?`,
+      `8. **Emotional Triggers**: Fear, aspiration, social proof, urgency?`,
+      `9. **Format & Style**: UGC, studio, motion graphics, testimonial, problem-solution?`,
+      `10. **What's Working**: What makes this effective? What creative choices could be adapted?`,
+    ].join("\n"),
+  });
+
+  return content;
+}
+
+// ── Tool 12: Batch Analyze Videos ────────────────────────────────────
+
+server.tool(
+  "batch_analyze_videos",
+  `Analyze multiple videos at once with automatic queuing.
+Processes videos in batches of 3 to avoid overloading the system.
+If more than 3 videos are provided, the rest are queued and processed
+as earlier batches complete. Returns combined results for all videos
+once every video in the batch has been analyzed.
+
+Each video gets the same full analysis as analyze_video:
+scene extraction, transcript, structured summary, and creative teardown.
+
+Accepts a mix of sources (URLs, Google Drive files, local paths).`,
+  {
+    videos: z
+      .array(
+        z.object({
+          source: z
+            .enum(["url", "google_drive", "local"])
+            .describe("Where to load the video from"),
+          url: z.string().optional().describe("Video URL (when source is 'url')"),
+          file_id: z
+            .string()
+            .optional()
+            .describe("Google Drive file ID or share link (when source is 'google_drive')"),
+          local_path: z
+            .string()
+            .optional()
+            .describe("Absolute path to local video file (when source is 'local')"),
+          label: z
+            .string()
+            .optional()
+            .describe("Optional label for this video (e.g. brand name, ad variant)"),
+        })
+      )
+      .min(1)
+      .max(50)
+      .describe("Array of videos to analyze"),
+    include_transcript: z
+      .boolean()
+      .default(true)
+      .describe("Transcribe audio via OpenAI Whisper for each video"),
+    scene_threshold: z
+      .number()
+      .min(0.1)
+      .max(0.9)
+      .default(0.3)
+      .describe("Scene change sensitivity (default 0.3)"),
+    max_frames: z
+      .number()
+      .min(1)
+      .max(20)
+      .default(12)
+      .describe("Maximum key frames per video (default 12)"),
+    concurrency: z
+      .number()
+      .min(1)
+      .max(5)
+      .default(3)
+      .describe("Max videos to process simultaneously (default 3)"),
+  },
+  async ({
+    videos,
+    include_transcript,
+    scene_threshold,
+    max_frames,
+    concurrency,
+  }) => {
+    // Map input to VideoSource objects
+    const sources: VideoSource[] = videos.map((v) => {
+      if (v.source === "url") return { type: "url" as const, url: v.url! };
+      if (v.source === "google_drive")
+        return { type: "google_drive" as const, file_id: v.file_id! };
+      return { type: "local" as const, local_path: v.local_path! };
+    });
+
+    const labels = videos.map(
+      (v, i) => v.label || `Video ${i + 1}`
+    );
+
+    const batch = await processBatch(
+      sources,
+      {
+        ingestVideo: ingestVideoFromSource,
+        analyzeVideo: async (videoId: string): Promise<BatchItemResult> => {
+          const content = await analyzeVideoCore(videoId, {
+            includeTranscript: include_transcript,
+            sceneThreshold: scene_threshold,
+            maxFrames: max_frames,
+          });
+          return { videoId, content };
+        },
+      },
+      concurrency
+    );
+
+    // Build combined output
+    const output: ContentBlock[] = [];
+
+    const completed = batch.items.filter((it) => it.status === "completed").length;
+    const failed = batch.items.filter((it) => it.status === "failed").length;
+    const elapsed = batch.completedAt
+      ? ((batch.completedAt.getTime() - batch.createdAt.getTime()) / 1000).toFixed(1)
+      : "?";
+
+    output.push({
+      type: "text",
+      text: [
+        `# Batch Video Analysis Complete`,
+        ``,
+        `**Batch ID:** \`${batch.id}\``,
+        `**Videos:** ${completed} completed, ${failed} failed (of ${batch.items.length} total)`,
+        `**Concurrency:** ${concurrency} at a time`,
+        `**Total time:** ${elapsed}s`,
+        ``,
+        `---`,
+      ].join("\n"),
+    });
+
+    for (let i = 0; i < batch.items.length; i++) {
+      const item = batch.items[i];
+      const label = labels[i];
+
+      output.push({
+        type: "text",
+        text: `\n# ${label}${item.videoId ? ` (\`${item.videoId}\`)` : ""}\n`,
+      });
+
+      if (item.status === "completed" && item.result) {
+        output.push(...item.result.content);
+      } else if (item.status === "failed") {
+        output.push({
+          type: "text",
+          text: `**Failed:** ${item.error || "Unknown error"}\n`,
+        });
+      }
+
+      if (i < batch.items.length - 1) {
+        output.push({ type: "text", text: `\n---\n` });
+      }
+    }
+
+    // Final prompt for Claude to do the comparative analysis
+    if (completed > 1) {
+      output.push({
+        type: "text",
+        text: [
+          ``,
+          `---`,
+          ``,
+          `## Comparative Analysis Instructions`,
+          ``,
+          `Now that all ${completed} videos have been analyzed, provide:`,
+          ``,
+          `1. **Cross-Video Patterns**: Common hooks, structures, or tactics across the videos`,
+          `2. **Standout Creative**: Which video(s) have the strongest creative execution and why`,
+          `3. **Differentiation**: How each video approaches the same category differently`,
+          `4. **Recommended Adaptations**: Key elements worth adapting for the client's next concept`,
+        ].join("\n"),
+      });
+    }
+
+    return { content: output };
   }
 );
 
