@@ -11,6 +11,7 @@ import {
 } from "./services/video-processing.js";
 import { TranscriptionService } from "./services/transcription.js";
 import { conceptSessions } from "./services/concept-session.js";
+import { brandStore } from "./services/brand-store.js";
 import {
   processBatch,
   type VideoSource,
@@ -21,6 +22,7 @@ import type {
   AdCopy,
   AngleRecommendation,
   ConceptSlideData,
+  CreativeStrategyPillar,
 } from "./types.js";
 
 // Shared content block type used by analysis helpers and batch processing
@@ -735,9 +737,14 @@ Returns interleaved images and text so Claude can:
 3. Read the transcript with timestamps
 4. Perform a full creative teardown
 
-Requires: Call ingest_video first to get a video_id.`,
+Requires: Call ingest_video first to get a video_id.
+Pass brand_slug to auto-load the brand's strategy, reviews, and top ads for cross-referencing.`,
   {
     video_id: z.string().describe("Video ID from ingest_video"),
+    brand_slug: z
+      .string()
+      .optional()
+      .describe("Brand slug — auto-loads strategy pillars, reviews, and top ads for cross-referencing"),
     include_transcript: z
       .boolean()
       .default(true)
@@ -759,185 +766,45 @@ Requires: Call ingest_video first to get a video_id.`,
       .default(12)
       .describe("Maximum key frames to extract (default 12)"),
   },
-  async ({ video_id, include_transcript, scene_threshold, max_frames }) => {
-    const stored = getStoredVideo(video_id);
-    if (!stored) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Video ID "${video_id}" not found. Call \`ingest_video\` first.`,
-          },
-        ],
-      };
-    }
+  async ({ video_id, brand_slug, include_transcript, scene_threshold, max_frames }) => {
+    // Load brand context from store if brand_slug provided
+    let brandContext: AnalysisBrandContext | undefined;
+    if (brand_slug) {
+      const ctx = await brandStore.getFullContext(brand_slug);
+      if (ctx) {
+        const anglesFromPillars = (ctx.strategy?.pillars || []).map((p) => ({
+          name: p.angle,
+          description: p.description || "",
+          hooks: [p.example_ugc_hook, p.example_headline].filter(Boolean) as string[],
+        }));
 
-    const video = getVideoProcessingService();
-    const { videoPath, metadata } = stored;
-    const content: (
-      | { type: "text"; text: string }
-      | { type: "image"; data: string; mimeType: string }
-    )[] = [];
-
-    const dur = `${Math.floor(metadata.duration / 60)}:${String(Math.floor(metadata.duration % 60)).padStart(2, "0")}`;
-    content.push({
-      type: "text" as const,
-      text: `## Video Analysis — \`${video_id}\`\nDuration: ${dur} | ${metadata.width}×${metadata.height} | ${metadata.fps} fps | ${metadata.codec}\n`,
-    });
-
-    // Try scene-change frame extraction first
-    let sceneResult;
-    try {
-      sceneResult = await video.extractSceneFrames(
-        videoPath,
-        scene_threshold,
-        max_frames
-      );
-    } catch {
-      sceneResult = null;
-    }
-
-    if (sceneResult && sceneResult.frames.length > 0) {
-      content.push({
-        type: "text" as const,
-        text: `### Scene Structure (${sceneResult.scenes.length} scenes detected)\n\nKey frames at scene boundaries:\n`,
-      });
-
-      for (let i = 0; i < sceneResult.frames.length; i++) {
-        const frame = sceneResult.frames[i];
-        const scene = sceneResult.scenes[i];
-        const ts = frame.timestamp;
-        const tsFmt = `${Math.floor(ts / 60)}:${String(Math.floor(ts % 60)).padStart(2, "0")}`;
-
-        if (scene) {
-          const endFmt = `${Math.floor(scene.endTime / 60)}:${String(Math.floor(scene.endTime % 60)).padStart(2, "0")}`;
-          content.push({
-            type: "text" as const,
-            text: `**Scene ${i + 1}** — ${tsFmt} to ${endFmt} (${scene.duration.toFixed(1)}s)`,
-          });
-        } else {
-          content.push({
-            type: "text" as const,
-            text: `**Frame at ${tsFmt}**`,
-          });
-        }
-
-        content.push({
-          type: "image" as const,
-          data: frame.base64,
-          mimeType: "image/jpeg",
-        });
-      }
-    } else {
-      // Fallback: regular interval frames
-      const interval = Math.max(
-        1,
-        Math.ceil(metadata.duration / max_frames)
-      );
-      const intervalFrames = await video.extractFrames(
-        videoPath,
-        interval,
-        max_frames
-      );
-
-      content.push({
-        type: "text" as const,
-        text: `### Key Frames (${intervalFrames.length} frames, every ${interval}s)\n`,
-      });
-
-      for (const frame of intervalFrames) {
-        const tsFmt = `${Math.floor(frame.timestamp / 60)}:${String(Math.floor(frame.timestamp % 60)).padStart(2, "0")}`;
-        content.push({
-          type: "text" as const,
-          text: `**${tsFmt}**`,
-        });
-        content.push({
-          type: "image" as const,
-          data: frame.base64,
-          mimeType: "image/jpeg",
-        });
+        brandContext = {
+          brand: ctx.profile.name,
+          product: ctx.profile.product,
+          targetAudience: ctx.profile.target_audience,
+          angles: anglesFromPillars,
+          strategyPillars: ctx.strategy?.pillars,
+          reviews: ctx.reviews.map((r) => ({
+            source: r.source,
+            text: r.text,
+            themes: r.themes,
+          })),
+          topAds: ctx.top_ads.map((a) => ({
+            brand_source: a.brand_source,
+            headline: a.headline,
+            body_copy: a.body_copy,
+            format: a.format,
+            why_it_works: a.why_it_works,
+          })),
+        };
       }
     }
 
-    // Transcript
-    if (include_transcript && metadata.hasAudio) {
-      try {
-        const audioPath = await video.extractAudio(videoPath);
-        const transcription = getTranscriptionService();
-        const result = await transcription.transcribe(audioPath);
-
-        if (result.transcript) {
-          const lines = result.segments.map((s) => {
-            const st = `${Math.floor(s.startTime / 60)}:${String(Math.floor(s.startTime % 60)).padStart(2, "0")}`;
-            const en = `${Math.floor(s.endTime / 60)}:${String(Math.floor(s.endTime % 60)).padStart(2, "0")}`;
-            return `[${st}–${en}] ${s.text}`;
-          });
-
-          content.push({
-            type: "text" as const,
-            text: `\n### Transcript\n\n${lines.join("\n")}\n\n**Full transcript:** ${result.transcript}`,
-          });
-        } else {
-          content.push({
-            type: "text" as const,
-            text: `\n### Transcript\nNo speech detected in the audio track.`,
-          });
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        content.push({
-          type: "text" as const,
-          text: `\n### Transcript\nTranscription unavailable: ${msg}\n\n_To enable: set the OPENAI_API_KEY environment variable._`,
-        });
-      }
-    } else if (!metadata.hasAudio) {
-      content.push({
-        type: "text" as const,
-        text: `\n### Transcript\nNo audio track detected in this video.`,
-      });
-    }
-
-    // Structured video summary
-    content.push({
-      type: "text" as const,
-      text: [
-        ``,
-        `### Video Summary`,
-        ``,
-        `Fill in the following structured fields based on the frames and transcript above:`,
-        ``,
-        `| Field | Value |`,
-        `|-------|-------|`,
-        `| **Title** | _Identify the ad title from text overlays, voiceover, or context_ |`,
-        `| **Duration** | ${dur} (${metadata.duration.toFixed(1)}s) |`,
-        `| **Caption Status** | _Are on-screen text captions/supers present? (Yes with burned-in / Yes with platform captions / No captions detected)_ |`,
-        `| **Caption Text Samples** | _List the first 2-3 on-screen text overlays or caption lines verbatim_ |`,
-        `| **B-Roll Detected** | _Is there B-roll footage? (Yes / No) — describe any supplemental footage vs. primary action_ |`,
-        `| **Notes** | _Any notable production details: transitions, music style, aspect ratio choices, platform-specific formatting_ |`,
-      ].join("\n"),
-    });
-
-    // Creative teardown prompt
-    content.push({
-      type: "text" as const,
-      text: [
-        ``,
-        `### Creative Teardown Instructions`,
-        ``,
-        `Perform a full creative teardown of this video ad:`,
-        ``,
-        `1. **Hook Analysis** (first 3s): Is this scroll-stopping? Rate the hook's shock value / pattern-interrupt strength. What grabs attention — visual hook, text overlay, movement, audio? Is it exaggerated or provocative enough?`,
-        `2. **Visual Storytelling Arc**: How does the visual narrative progress?`,
-        `3. **Scene Structure & Pacing**: Which scenes are longest/shortest? How does pacing drive engagement?`,
-        `4. **Text Overlays & Graphics**: On-screen text, supers, graphic elements — when do they appear? Are they bold and proactive or generic?`,
-        `5. **Product Presentation**: When/how is the product shown? Lifestyle vs. product-focused vs. UGC?`,
-        `6. **CTA Execution**: How does the ad close? What CTA is used and how? Is it direct and urgent?`,
-        `7. **Target Audience Signals**: Who is this for? Visual/copy cues indicating target demo?`,
-        `8. **Emotional Triggers**: Fear, aspiration, social proof, urgency? How exaggerated are the stakes?`,
-        `9. **Format & Style**: UGC, studio, motion graphics, testimonial, problem-solution?`,
-        `10. **Copy Proactiveness**: Is the messaging direct and commanding, or passive and safe? Rate: Bold / Moderate / Tame.`,
-        `11. **What's Working**: What makes this effective? What creative choices could be adapted?`,
-      ].join("\n"),
+    const content = await analyzeVideoCore(video_id, {
+      includeTranscript: include_transcript,
+      sceneThreshold: scene_threshold,
+      maxFrames: max_frames,
+      brandContext,
     });
 
     return { content };
@@ -1249,6 +1116,435 @@ concept evolution or resuming a refinement session.`,
   }
 );
 
+// ── Tool 12: Setup Brand ──────────────────────────────────────────────
+
+server.tool(
+  "setup_brand",
+  `Create or update a brand profile. Creates a folder for the brand to store
+its creative strategy, reviews, and top-performing ads.
+Returns the brand slug used to reference this brand in other tools.`,
+  {
+    name: z.string().describe("Brand name (e.g. 'Glossier', 'Summer Fridays')"),
+    product: z.string().optional().describe("Primary product or service"),
+    target_audience: z.string().optional().describe("Target audience description"),
+    brand_voice: z
+      .object({
+        tone: z.string().describe("Brand tone"),
+        style: z.string().describe("Writing style"),
+        dos: z.array(z.string()).default([]),
+        donts: z.array(z.string()).default([]),
+      })
+      .optional()
+      .describe("Brand voice guidelines"),
+  },
+  async ({ name, product, target_audience, brand_voice }) => {
+    const profile = await brandStore.createBrand({
+      name,
+      product,
+      targetAudience: target_audience,
+      brandVoice: brand_voice,
+    });
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: [
+            `Brand profile created.`,
+            ``,
+            `**Brand:** ${profile.name}`,
+            `**Slug:** \`${profile.slug}\` — use this in other tools`,
+            product ? `**Product:** ${product}` : null,
+            target_audience ? `**Target Audience:** ${target_audience}` : null,
+            ``,
+            `**Folder:** \`brands/${profile.slug}/\``,
+            `- \`profile.json\` — brand metadata`,
+            `- \`strategy.json\` — import with \`import_brand_strategy\``,
+            `- \`reviews.json\` — add with \`add_brand_reviews\``,
+            `- \`top-ads.json\` — save with \`save_top_ad\``,
+            ``,
+            `Next: Import the brand's creative strategy JSON with \`import_brand_strategy\`.`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      ],
+    };
+  }
+);
+
+// ── Tool 13: Import Brand Strategy ───────────────────────────────────
+
+const strategyPillarSchema = z.object({
+  naming_convention: z.string().default(""),
+  priority: z.string().default(""),
+  persona: z.string().default(""),
+  angle: z.string(),
+  sub_angles: z.array(z.string()).default([]),
+  primary_benefits: z.array(z.string()).default([]),
+  description: z.string().default(""),
+  emotional_fear: z.string().default(""),
+  problem_solution_promise: z.string().default(""),
+  before_after: z.string().default(""),
+  frameworks: z.array(z.string()).default([]),
+  example_headline: z.string().default(""),
+  example_testimonial: z.string().default(""),
+  example_ugc_hook: z.string().default(""),
+  key_points_framing: z.array(z.string()).default([]),
+  objections: z.array(z.string()).default([]),
+});
+
+server.tool(
+  "import_brand_strategy",
+  `Import a brand's creative strategy pillars from JSON.
+Each pillar maps to the standard columns: Naming Convention, Priority, Persona,
+Angle, Sub-Angles, Primary Benefits, Description, Emotional Fear,
+Problem>Solution>Promise, Before/After, Frameworks, Example Headline,
+Example Testimonial, Example UGC Hook, Key Points/Framing, Objections.
+
+You can paste the JSON directly or provide a path to a local JSON file.
+The strategy is saved to the brand's folder and used to cross-reference
+video analysis and ad copy generation.`,
+  {
+    brand_slug: z.string().describe("Brand slug from setup_brand"),
+    pillars: z
+      .array(strategyPillarSchema)
+      .optional()
+      .describe("Array of strategy pillars (the JSON data)"),
+    json_file_path: z
+      .string()
+      .optional()
+      .describe("Path to a local JSON file containing the pillars array"),
+  },
+  async ({ brand_slug, pillars, json_file_path }) => {
+    const profile = await brandStore.findBrand(brand_slug);
+    if (!profile) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Brand "${brand_slug}" not found. Run \`setup_brand\` first.`,
+          },
+        ],
+      };
+    }
+
+    let data: CreativeStrategyPillar[];
+
+    if (pillars && pillars.length > 0) {
+      data = pillars as CreativeStrategyPillar[];
+    } else if (json_file_path) {
+      try {
+        const raw = await import("fs/promises").then((f) =>
+          f.readFile(json_file_path, "utf-8")
+        );
+        const parsed = JSON.parse(raw);
+        // Support both { pillars: [...] } and bare array
+        data = Array.isArray(parsed) ? parsed : parsed.pillars || [];
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [
+            { type: "text" as const, text: `Failed to read JSON file: ${msg}` },
+          ],
+        };
+      }
+    } else {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Provide either `pillars` (JSON array) or `json_file_path`.",
+          },
+        ],
+      };
+    }
+
+    const strategy = await brandStore.importStrategy(profile.slug, data);
+
+    const summary = data
+      .map(
+        (p, i) =>
+          `${i + 1}. **${p.angle}** (${p.priority || "—"}) — ${p.persona || "General"}${p.sub_angles?.length ? `\n   Sub-angles: ${p.sub_angles.join(", ")}` : ""}`
+      )
+      .join("\n");
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: [
+            `Strategy imported for **${profile.name}** — ${data.length} pillars.`,
+            ``,
+            `### Pillars`,
+            summary,
+            ``,
+            `Saved to \`brands/${profile.slug}/strategy.json\`.`,
+            `These pillars will be used to cross-reference video analysis and ad copy generation when you pass \`brand_slug: "${profile.slug}"\`.`,
+          ].join("\n"),
+        },
+      ],
+    };
+  }
+);
+
+// ── Tool 14: Add Brand Reviews ───────────────────────────────────────
+
+server.tool(
+  "add_brand_reviews",
+  `Add customer reviews to a brand's stored context.
+Reviews help inform messaging angles, identify real customer language,
+and ground ad copy in authentic testimonials.`,
+  {
+    brand_slug: z.string().describe("Brand slug"),
+    reviews: z
+      .array(
+        z.object({
+          source: z.string().describe("Review source (e.g. 'Amazon', 'TrustPilot', 'Instagram DM')"),
+          text: z.string().describe("Review text"),
+          rating: z.number().optional().describe("Star rating if available"),
+          date: z.string().optional().describe("Review date"),
+          themes: z
+            .array(z.string())
+            .default([])
+            .describe("Key themes (e.g. 'fast results', 'easy to use')"),
+        })
+      )
+      .min(1)
+      .describe("Reviews to add"),
+  },
+  async ({ brand_slug, reviews }) => {
+    const profile = await brandStore.findBrand(brand_slug);
+    if (!profile) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Brand "${brand_slug}" not found. Run \`setup_brand\` first.`,
+          },
+        ],
+      };
+    }
+
+    const added = await brandStore.addReviews(profile.slug, reviews);
+    const allReviews = await brandStore.getReviews(profile.slug);
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Added ${added.length} reviews to **${profile.name}** (${allReviews.length} total).\n\nThese will be available when analyzing videos or generating ad copy with \`brand_slug: "${profile.slug}"\`.`,
+        },
+      ],
+    };
+  }
+);
+
+// ── Tool 15: Save Top-Performing Ad ──────────────────────────────────
+
+server.tool(
+  "save_top_ad",
+  `Save a top-performing ad as a reference for a brand.
+Top ads serve as benchmarks — their hooks, structures, and copy patterns
+are used to inform future creative and cross-reference analysis.`,
+  {
+    brand_slug: z.string().describe("Brand slug to save the ad under"),
+    brand_source: z.string().describe("Brand that ran this ad (e.g. 'Competitor X')"),
+    headline: z.string().optional(),
+    body_copy: z.string().optional(),
+    description: z.string().optional(),
+    ad_url: z.string().optional().describe("URL to the ad or preview"),
+    platform: z.string().optional().describe("e.g. 'Facebook', 'Instagram', 'TikTok'"),
+    format: z.string().optional().describe("e.g. 'UGC Video', 'Static Image', 'Carousel'"),
+    why_it_works: z.string().optional().describe("Notes on what makes this ad effective"),
+    metrics_notes: z.string().optional().describe("Performance notes if available"),
+    video_id: z.string().optional().describe("Video ID from ingest_video if this ad was analyzed"),
+  },
+  async (params) => {
+    const profile = await brandStore.findBrand(params.brand_slug);
+    if (!profile) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Brand "${params.brand_slug}" not found. Run \`setup_brand\` first.`,
+          },
+        ],
+      };
+    }
+
+    const { brand_slug, ...adData } = params;
+    const saved = await brandStore.saveTopAd(profile.slug, adData);
+    const allAds = await brandStore.getTopAds(profile.slug);
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: [
+            `Top ad saved to **${profile.name}** (${allAds.length} total).`,
+            ``,
+            `**ID:** \`${saved.id}\``,
+            `**Source:** ${saved.brand_source}`,
+            saved.headline ? `**Headline:** ${saved.headline}` : null,
+            saved.format ? `**Format:** ${saved.format}` : null,
+            saved.why_it_works
+              ? `**Why it works:** ${saved.why_it_works}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      ],
+    };
+  }
+);
+
+// ── Tool 16: Get Brand Context ───────────────────────────────────────
+
+server.tool(
+  "get_brand_context",
+  `Retrieve the full stored context for a brand — profile, creative strategy
+pillars, reviews, and top-performing ads. Use this before analysis or
+copy generation to ground the output in the brand's specific strategy.
+
+Pass no brand_slug to list all available brands.`,
+  {
+    brand_slug: z
+      .string()
+      .optional()
+      .describe("Brand slug. Omit to list all brands."),
+  },
+  async ({ brand_slug }) => {
+    if (!brand_slug) {
+      const brands = await brandStore.listBrands();
+      if (brands.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No brands set up yet. Use `setup_brand` to create one.",
+            },
+          ],
+        };
+      }
+
+      const listing = brands.map(
+        (b) =>
+          `- **${b.name}** (\`${b.slug}\`)${b.product ? ` — ${b.product}` : ""}`
+      );
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `## Available Brands\n\n${listing.join("\n")}\n\nCall with a \`brand_slug\` to see full context.`,
+          },
+        ],
+      };
+    }
+
+    const ctx = await brandStore.getFullContext(brand_slug);
+    if (!ctx) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Brand "${brand_slug}" not found.`,
+          },
+        ],
+      };
+    }
+
+    const sections: string[] = [];
+
+    // Profile
+    sections.push(
+      `## ${ctx.profile.name}`,
+      `**Slug:** \`${ctx.profile.slug}\``,
+      ctx.profile.product ? `**Product:** ${ctx.profile.product}` : "",
+      ctx.profile.target_audience
+        ? `**Target Audience:** ${ctx.profile.target_audience}`
+        : ""
+    );
+
+    if (ctx.profile.brand_voice) {
+      const bv = ctx.profile.brand_voice;
+      sections.push(
+        `\n### Brand Voice`,
+        `- Tone: ${bv.tone}`,
+        `- Style: ${bv.style}`,
+        bv.dos.length ? `- Do: ${bv.dos.join("; ")}` : "",
+        bv.donts.length ? `- Don't: ${bv.donts.join("; ")}` : ""
+      );
+    }
+
+    // Strategy
+    if (ctx.strategy && ctx.strategy.pillars.length > 0) {
+      sections.push(`\n### Creative Strategy (${ctx.strategy.pillars.length} pillars)`);
+      for (const p of ctx.strategy.pillars) {
+        sections.push(
+          `\n#### ${p.angle} (${p.priority || "—"})`,
+          `- **Persona:** ${p.persona || "—"}`,
+          `- **Description:** ${p.description || "—"}`,
+          p.sub_angles.length ? `- **Sub-Angles:** ${p.sub_angles.join(", ")}` : "",
+          p.primary_benefits.length
+            ? `- **Benefits:** ${p.primary_benefits.join(", ")}`
+            : "",
+          `- **Emotional Fear:** ${p.emotional_fear || "—"}`,
+          `- **Problem > Solution > Promise:** ${p.problem_solution_promise || "—"}`,
+          `- **Before/After:** ${p.before_after || "—"}`,
+          p.frameworks.length ? `- **Frameworks:** ${p.frameworks.join(", ")}` : "",
+          `- **Example Headline:** ${p.example_headline || "—"}`,
+          `- **Example Testimonial:** ${p.example_testimonial || "—"}`,
+          `- **Example UGC Hook:** ${p.example_ugc_hook || "—"}`,
+          p.key_points_framing.length
+            ? `- **Key Points:** ${p.key_points_framing.join("; ")}`
+            : "",
+          p.objections.length ? `- **Objections:** ${p.objections.join("; ")}` : ""
+        );
+      }
+    } else {
+      sections.push(
+        `\n### Creative Strategy`,
+        `_Not imported yet. Use \`import_brand_strategy\`._`
+      );
+    }
+
+    // Reviews
+    sections.push(
+      `\n### Reviews (${ctx.reviews.length})${ctx.reviews.length === 0 ? "\n_None yet. Use `add_brand_reviews`._" : ""}`
+    );
+    for (const r of ctx.reviews.slice(0, 10)) {
+      sections.push(
+        `- ${r.rating ? `${"★".repeat(r.rating)} ` : ""}(${r.source}) "${r.text.slice(0, 120)}${r.text.length > 120 ? "..." : ""}"`
+      );
+    }
+    if (ctx.reviews.length > 10) {
+      sections.push(`_...and ${ctx.reviews.length - 10} more._`);
+    }
+
+    // Top ads
+    sections.push(
+      `\n### Top-Performing Ads (${ctx.top_ads.length})${ctx.top_ads.length === 0 ? "\n_None yet. Use `save_top_ad`._" : ""}`
+    );
+    for (const a of ctx.top_ads.slice(0, 10)) {
+      sections.push(
+        `- **${a.brand_source}**${a.format ? ` (${a.format})` : ""}${a.headline ? ` — "${a.headline}"` : ""}${a.why_it_works ? `\n  _${a.why_it_works}_` : ""}`
+      );
+    }
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: sections.filter(Boolean).join("\n"),
+        },
+      ],
+    };
+  }
+);
+
 // ── Batch helpers (shared by batch_analyze_videos) ───────────────────
 
 async function ingestVideoFromSource(
@@ -1274,11 +1570,20 @@ async function ingestVideoFromSource(
   }
 }
 
-interface BrandContext {
+interface AnalysisBrandContext {
   brand: string;
   product?: string;
   targetAudience?: string;
   angles: { name: string; description: string; hooks: string[] }[];
+  strategyPillars?: CreativeStrategyPillar[];
+  reviews?: { source: string; text: string; themes?: string[] }[];
+  topAds?: {
+    brand_source: string;
+    headline?: string;
+    body_copy?: string;
+    format?: string;
+    why_it_works?: string;
+  }[];
 }
 
 async function analyzeVideoCore(
@@ -1287,7 +1592,7 @@ async function analyzeVideoCore(
     includeTranscript: boolean;
     sceneThreshold: number;
     maxFrames: number;
-    brandContext?: BrandContext;
+    brandContext?: AnalysisBrandContext;
   }
 ): Promise<ContentBlock[]> {
   const stored = getStoredVideo(videoId);
@@ -1453,10 +1758,93 @@ async function analyzeVideoCore(
     });
   }
 
+  // Strategy pillars deep context (when loaded from brand store)
+  if (opts.brandContext?.strategyPillars && opts.brandContext.strategyPillars.length > 0) {
+    const bc = opts.brandContext;
+    const pillarSummary = bc.strategyPillars!
+      .map(
+        (p) =>
+          `- **${p.angle}** (${p.priority || "—"}): ${p.description || "—"}\n` +
+          `  Fear: ${p.emotional_fear || "—"} | P>S>P: ${p.problem_solution_promise || "—"}\n` +
+          `  Example hook: "${p.example_ugc_hook || p.example_headline || "—"}"\n` +
+          `  Frameworks: ${p.frameworks.length ? p.frameworks.join(", ") : "—"}`
+      )
+      .join("\n");
+
+    content.push({
+      type: "text",
+      text: [
+        ``,
+        `### Strategy Pillars — ${bc.brand}`,
+        ``,
+        pillarSummary,
+        ``,
+        `Cross-reference this video against the full strategy pillars:`,
+        `- Which pillar's **emotional fear** does this video most tap into?`,
+        `- Which pillar's **Problem>Solution>Promise** framework does this video follow?`,
+        `- Could this video's hook be adapted as a **UGC hook** for any of the pillars?`,
+        `- Which **objections** from the pillars does this video address (or fail to address)?`,
+      ].join("\n"),
+    });
+  }
+
+  // Reviews context (when loaded from brand store)
+  if (opts.brandContext?.reviews && opts.brandContext.reviews.length > 0) {
+    const reviews = opts.brandContext.reviews;
+    const sampleReviews = reviews
+      .slice(0, 5)
+      .map((r) => `- (${r.source}) "${r.text.slice(0, 150)}${r.text.length > 150 ? "..." : ""}"${r.themes?.length ? ` [${r.themes.join(", ")}]` : ""}`)
+      .join("\n");
+
+    content.push({
+      type: "text",
+      text: [
+        ``,
+        `### Customer Voice — ${opts.brandContext.brand} (${reviews.length} reviews)`,
+        ``,
+        sampleReviews,
+        reviews.length > 5 ? `_...and ${reviews.length - 5} more._` : "",
+        ``,
+        `Does this video's messaging mirror real customer language from the reviews?`,
+        `Which review themes could strengthen the adaptation of this video for ${opts.brandContext.brand}?`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    });
+  }
+
+  // Top ads context (when loaded from brand store)
+  if (opts.brandContext?.topAds && opts.brandContext.topAds.length > 0) {
+    const ads = opts.brandContext.topAds;
+    const adSummary = ads
+      .slice(0, 5)
+      .map(
+        (a) =>
+          `- **${a.brand_source}**${a.format ? ` (${a.format})` : ""}${a.headline ? `: "${a.headline}"` : ""}${a.why_it_works ? ` — ${a.why_it_works}` : ""}`
+      )
+      .join("\n");
+
+    content.push({
+      type: "text",
+      text: [
+        ``,
+        `### Top-Performing Ad References — ${opts.brandContext.brand} (${ads.length} saved)`,
+        ``,
+        adSummary,
+        ads.length > 5 ? `_...and ${ads.length - 5} more._` : "",
+        ``,
+        `How does this video compare to the saved top performers?`,
+        `Which elements from the top performers are present or missing in this video?`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    });
+  }
+
   return content;
 }
 
-// ── Tool 12: Batch Analyze Videos ────────────────────────────────────
+// ── Tool 17: Batch Analyze Videos ────────────────────────────────────
 
 server.tool(
   "batch_analyze_videos",
@@ -1469,24 +1857,33 @@ once every video in the batch has been analyzed.
 Each video gets the same full analysis as analyze_video:
 scene extraction, transcript, structured summary, and creative teardown.
 
-When brand context and messaging angles are provided, each video is
-cross-referenced against the brand's strategy — scoring angle alignment,
+When brand context is provided (via brand_slug or inline angles), each video
+is cross-referenced against the brand's strategy — scoring angle alignment,
 identifying adaptable elements, and recommending which angles fit best.
+
+Use brand_slug to auto-load the full brand context (strategy pillars, reviews,
+top ads) from the brand store. Or pass inline messaging_angles for quick use.
 
 Accepts a mix of sources (URLs, Google Drive files, local paths).`,
   {
+    brand_slug: z
+      .string()
+      .optional()
+      .describe(
+        "Brand slug from setup_brand — auto-loads strategy, reviews, and top ads"
+      ),
     brand: z
       .string()
       .optional()
-      .describe("Client brand name — enables angle cross-referencing per video"),
+      .describe("Client brand name (used if brand_slug is not provided)"),
     product: z
       .string()
       .optional()
-      .describe("Specific product or service being advertised"),
+      .describe("Specific product or service (override or supplement brand_slug)"),
     target_audience: z
       .string()
       .optional()
-      .describe("Target audience description for the brand"),
+      .describe("Target audience (override or supplement brand_slug)"),
     messaging_angles: z
       .array(
         z.object({
@@ -1500,7 +1897,7 @@ Accepts a mix of sources (URLs, Google Drive files, local paths).`,
       )
       .default([])
       .describe(
-        "Brand's messaging angles from the strategy doc — each video will be scored against these"
+        "Inline messaging angles — used if brand_slug has no strategy, or to supplement it"
       ),
     videos: z
       .array(
@@ -1550,6 +1947,7 @@ Accepts a mix of sources (URLs, Google Drive files, local paths).`,
       .describe("Max videos to process simultaneously (default 3)"),
   },
   async ({
+    brand_slug,
     brand,
     product,
     target_audience,
@@ -1560,16 +1958,56 @@ Accepts a mix of sources (URLs, Google Drive files, local paths).`,
     max_frames,
     concurrency,
   }) => {
-    // Build brand context if angles are provided
-    const brandContext: BrandContext | undefined =
-      brand && messaging_angles.length > 0
-        ? {
-            brand,
-            product,
-            targetAudience: target_audience,
-            angles: messaging_angles,
-          }
-        : undefined;
+    // Build brand context — prefer brand_slug (loads from store), fall back to inline params
+    let brandContext: AnalysisBrandContext | undefined;
+
+    if (brand_slug) {
+      const ctx = await brandStore.getFullContext(brand_slug);
+      if (ctx) {
+        // Convert strategy pillars to simple angles for the cross-reference table
+        const anglesFromPillars = (ctx.strategy?.pillars || []).map((p) => ({
+          name: p.angle,
+          description: p.description || "",
+          hooks: [p.example_ugc_hook, p.example_headline].filter(Boolean) as string[],
+        }));
+
+        // Merge inline angles with pillar-derived angles (inline takes priority)
+        const allAngles =
+          messaging_angles.length > 0
+            ? messaging_angles
+            : anglesFromPillars;
+
+        brandContext = {
+          brand: ctx.profile.name,
+          product: product || ctx.profile.product,
+          targetAudience: target_audience || ctx.profile.target_audience,
+          angles: allAngles,
+          strategyPillars: ctx.strategy?.pillars,
+          reviews: ctx.reviews.map((r) => ({
+            source: r.source,
+            text: r.text,
+            themes: r.themes,
+          })),
+          topAds: ctx.top_ads.map((a) => ({
+            brand_source: a.brand_source,
+            headline: a.headline,
+            body_copy: a.body_copy,
+            format: a.format,
+            why_it_works: a.why_it_works,
+          })),
+        };
+      }
+    }
+
+    // Fall back to inline brand + angles if no brand_slug or brand not found
+    if (!brandContext && brand && messaging_angles.length > 0) {
+      brandContext = {
+        brand,
+        product,
+        targetAudience: target_audience,
+        angles: messaging_angles,
+      };
+    }
 
     // Map input to VideoSource objects
     const sources: VideoSource[] = videos.map((v) => {

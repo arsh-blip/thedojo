@@ -117,6 +117,85 @@ export interface TranscriptSegment {
   endTime: number;
 }
 
+// ── Brand Creative Strategy Types ─────────────────────────────────────
+
+/** A single creative strategy pillar/angle from the brand's strategy doc */
+export interface CreativeStrategyPillar {
+  naming_convention: string;
+  priority: string;
+  persona: string;
+  angle: string;
+  sub_angles: string[];
+  primary_benefits: string[];
+  description: string;
+  emotional_fear: string;
+  problem_solution_promise: string;
+  before_after: string;
+  frameworks: string[];
+  example_headline: string;
+  example_testimonial: string;
+  example_ugc_hook: string;
+  key_points_framing: string[];
+  objections: string[];
+}
+
+/** Full creative strategy for a brand (array of pillars) */
+export interface BrandCreativeStrategy {
+  pillars: CreativeStrategyPillar[];
+  updated_at: string;
+}
+
+/** A saved review for brand context */
+export interface BrandReview {
+  id: string;
+  source: string;
+  text: string;
+  rating?: number;
+  date?: string;
+  themes?: string[];
+  added_at: string;
+}
+
+/** A saved top-performing ad reference */
+export interface TopPerformingAd {
+  id: string;
+  brand_source: string;
+  headline?: string;
+  body_copy?: string;
+  description?: string;
+  ad_url?: string;
+  platform?: string;
+  format?: string;
+  why_it_works?: string;
+  metrics_notes?: string;
+  video_id?: string;
+  added_at: string;
+}
+
+/** Brand profile / config */
+export interface BrandProfile {
+  slug: string;
+  name: string;
+  product?: string;
+  target_audience?: string;
+  brand_voice?: {
+    tone: string;
+    style: string;
+    dos: string[];
+    donts: string[];
+  };
+  created_at: string;
+  updated_at: string;
+}
+
+/** Full brand context loaded from disk */
+export interface BrandContext {
+  profile: BrandProfile;
+  strategy?: BrandCreativeStrategy;
+  reviews: BrandReview[];
+  top_ads: TopPerformingAd[];
+}
+
 // ── Concept Session Types (Iterative Refinement) ─────────────────────
 
 export interface ConceptIteration {
