@@ -880,6 +880,26 @@ Requires: Call ingest_video first to get a video_id.`,
       });
     }
 
+    // Structured video summary
+    content.push({
+      type: "text" as const,
+      text: [
+        ``,
+        `### Video Summary`,
+        ``,
+        `Fill in the following structured fields based on the frames and transcript above:`,
+        ``,
+        `| Field | Value |`,
+        `|-------|-------|`,
+        `| **Title** | _Identify the ad title from text overlays, voiceover, or context_ |`,
+        `| **Duration** | ${dur} (${metadata.duration.toFixed(1)}s) |`,
+        `| **Caption Status** | _Are on-screen text captions/supers present? (Yes with burned-in / Yes with platform captions / No captions detected)_ |`,
+        `| **Caption Text Samples** | _List the first 2-3 on-screen text overlays or caption lines verbatim_ |`,
+        `| **B-Roll Detected** | _Is there B-roll footage? (Yes / No) — describe any supplemental footage vs. primary action_ |`,
+        `| **Notes** | _Any notable production details: transitions, music style, aspect ratio choices, platform-specific formatting_ |`,
+      ].join("\n"),
+    });
+
     // Creative teardown prompt
     content.push({
       type: "text" as const,
