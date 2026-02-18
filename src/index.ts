@@ -39,7 +39,9 @@ function getVideoProcessingService(): VideoProcessingService {
 }
 
 function getTranscriptionService(): TranscriptionService {
-  return new TranscriptionService(createOAuth2Client());
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
+  return new TranscriptionService(apiKey);
 }
 
 // ── MCP Server ──────────────────────────────────────────────────────
@@ -723,7 +725,7 @@ Requires: Call ingest_video first to get a video_id.`,
       .boolean()
       .default(true)
       .describe(
-        "Extract and transcribe audio (requires Google Speech-to-Text API)"
+        "Extract and transcribe audio via OpenAI Whisper (requires OPENAI_API_KEY)"
       ),
     scene_threshold: z
       .number()
@@ -868,7 +870,7 @@ Requires: Call ingest_video first to get a video_id.`,
         const msg = err instanceof Error ? err.message : String(err);
         content.push({
           type: "text" as const,
-          text: `\n### Transcript\nTranscription unavailable: ${msg}\n\n_To enable: ensure Google Cloud Speech-to-Text API is enabled and OAuth credentials have the required scope._`,
+          text: `\n### Transcript\nTranscription unavailable: ${msg}\n\n_To enable: set the OPENAI_API_KEY environment variable._`,
         });
       }
     } else if (!metadata.hasAudio) {

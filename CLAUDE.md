@@ -23,7 +23,8 @@ Add to your Claude settings (`~/.claude/settings.json` or project `.mcp.json`):
         "META_ACCESS_TOKEN": "your_token",
         "GOOGLE_CLIENT_ID": "your_id",
         "GOOGLE_CLIENT_SECRET": "your_secret",
-        "GOOGLE_REFRESH_TOKEN": "your_token"
+        "GOOGLE_REFRESH_TOKEN": "your_token",
+        "OPENAI_API_KEY": "your_key"
       }
     }
   }
@@ -91,7 +92,7 @@ Use `get_concept_history` to view all iterations for a session or list active se
 
 ### Requirements
 - **ffmpeg** must be installed for video processing (`brew install ffmpeg` or `apt install ffmpeg`)
-- **Google Cloud Speech-to-Text API** must be enabled for audio transcription (optional — analysis works without it)
+- **OPENAI_API_KEY** must be set for Whisper audio transcription (optional — video analysis works without it)
 
 ## Available Tools
 
