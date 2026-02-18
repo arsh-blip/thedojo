@@ -424,14 +424,21 @@ ${key_benefits.length ? `### Key Benefits\n${key_benefits.map((b) => `- ${b}`).j
 - Available CTAs: ${cta_options.join(", ")}
 - Each variation needs: **Headline** (≤40 chars), **Primary Text** (≤125 chars for optimal, up to 500), **Description** (≤30 chars), **CTA**
 
+### Creative Best Practices
+- **Hook MUST be scroll-stopping** — shock-provoking, exaggerated, pattern-interrupting. The first line should make someone stop mid-scroll.
+- **Be proactive, not passive** — speak directly, use commands, create urgency. "You're wasting money on X" beats "Many people find X challenging."
+- **Exaggerate the stakes** — amplify the problem and the transformation. Make the before/after feel dramatic.
+- **No boring intros** — never start with the brand name or a generic greeting. Lead with the most provocative claim.
+
 ### Instructions for Claude
 Write ${num_variations} distinct ad copy variations for ${brand}. Each variation should:
-1. Lead with a different hook from the angle
+1. Open with a **shock-provoking, scroll-stopping hook** — exaggerated, bold, pattern-interrupting
 2. Be inspired by the reference ad's structure/approach but adapted for ${brand}'s voice
 3. Include a clear value proposition tied to the angle
 4. Use the brand voice guidelines
-5. Format each variation as:
-   - **Variation Name** (descriptive label like "Social Proof Hook" or "Problem-Solution")
+5. Keep the tone proactive and direct — no hedging, no passive voice
+6. Format each variation as:
+   - **Variation Name** (descriptive label like "Shock Hook" or "Exaggerated Problem-Solution")
    - **Headline**: ...
    - **Primary Text**: ...
    - **Description**: ...
@@ -919,16 +926,17 @@ Requires: Call ingest_video first to get a video_id.`,
         ``,
         `Perform a full creative teardown of this video ad:`,
         ``,
-        `1. **Hook Analysis** (first 3s): What grabs attention? Visual hook, text overlay, movement, audio?`,
+        `1. **Hook Analysis** (first 3s): Is this scroll-stopping? Rate the hook's shock value / pattern-interrupt strength. What grabs attention — visual hook, text overlay, movement, audio? Is it exaggerated or provocative enough?`,
         `2. **Visual Storytelling Arc**: How does the visual narrative progress?`,
         `3. **Scene Structure & Pacing**: Which scenes are longest/shortest? How does pacing drive engagement?`,
-        `4. **Text Overlays & Graphics**: On-screen text, supers, graphic elements — when do they appear?`,
+        `4. **Text Overlays & Graphics**: On-screen text, supers, graphic elements — when do they appear? Are they bold and proactive or generic?`,
         `5. **Product Presentation**: When/how is the product shown? Lifestyle vs. product-focused vs. UGC?`,
-        `6. **CTA Execution**: How does the ad close? What CTA is used and how?`,
+        `6. **CTA Execution**: How does the ad close? What CTA is used and how? Is it direct and urgent?`,
         `7. **Target Audience Signals**: Who is this for? Visual/copy cues indicating target demo?`,
-        `8. **Emotional Triggers**: Fear, aspiration, social proof, urgency?`,
+        `8. **Emotional Triggers**: Fear, aspiration, social proof, urgency? How exaggerated are the stakes?`,
         `9. **Format & Style**: UGC, studio, motion graphics, testimonial, problem-solution?`,
-        `10. **What's Working**: What makes this effective? What creative choices could be adapted?`,
+        `10. **Copy Proactiveness**: Is the messaging direct and commanding, or passive and safe? Rate: Bold / Moderate / Tame.`,
+        `11. **What's Working**: What makes this effective? What creative choices could be adapted?`,
       ].join("\n"),
     });
 
@@ -1024,18 +1032,26 @@ Returns a session_id and structured brief for Claude to generate the first conce
       ``,
       `### Instructions for Claude`,
       ``,
-      `Based on the video analysis, propose a creative concept for ${brand} that adapts what's working in the reference video:`,
+      `Based on the video analysis, propose a creative concept for ${brand} that adapts what's working in the reference video.`,
       ``,
-      `1. **Concept Name** — Descriptive label (e.g. "UGC Transformation Story")`,
+      `**CREATIVE BEST PRACTICES — apply to every concept:**`,
+      `- The hook MUST be scroll-stopping — shock-provoking, exaggerated, pattern-interrupting`,
+      `- Copy must be proactive and direct — commands, urgency, bold claims. No passive voice, no hedging.`,
+      `- Exaggerate the stakes — make the problem feel unbearable and the transformation dramatic`,
+      `- No boring intros — never lead with the brand name or a generic greeting`,
+      ``,
+      `Deliver the concept in this structure:`,
+      ``,
+      `1. **Concept Name** — Descriptive label (e.g. "Shock & Transform UGC")`,
       `2. **Recommended Angle** — Which messaging angle to lead with and why`,
       `3. **Video Structure** — Scene-by-scene breakdown:`,
       `   - Duration per scene`,
       `   - Visual description`,
-      `   - On-screen text / supers`,
+      `   - On-screen text / supers (bold, scroll-stopping)`,
       `   - Voiceover / audio`,
-      `4. **Hook Strategy** — How the first 3 seconds grab attention`,
-      `5. **CTA Approach** — How the ad closes and drives action`,
-      `6. **Ad Copy** — Headline, primary text, description, CTA button`,
+      `4. **Hook Strategy** — How the first 3 seconds STOP the scroll. Must be shocking, provocative, or pattern-interrupting.`,
+      `5. **CTA Approach** — How the ad closes and drives action. Direct and urgent.`,
+      `6. **Ad Copy** — Headline, primary text, description, CTA button. All copy should be proactive and exaggerated.`,
       `7. **Visual Direction** — Style, mood, color palette, talent/no talent`,
       `8. **Why This Works** — How this leverages what's effective in the reference`,
       ``,
@@ -1385,16 +1401,17 @@ async function analyzeVideoCore(
       ``,
       `Perform a full creative teardown of this video ad:`,
       ``,
-      `1. **Hook Analysis** (first 3s): What grabs attention? Visual hook, text overlay, movement, audio?`,
+      `1. **Hook Analysis** (first 3s): Is this scroll-stopping? Rate the hook's shock value / pattern-interrupt strength. What grabs attention — visual hook, text overlay, movement, audio? Is it exaggerated or provocative enough?`,
       `2. **Visual Storytelling Arc**: How does the visual narrative progress?`,
       `3. **Scene Structure & Pacing**: Which scenes are longest/shortest? How does pacing drive engagement?`,
-      `4. **Text Overlays & Graphics**: On-screen text, supers, graphic elements — when do they appear?`,
+      `4. **Text Overlays & Graphics**: On-screen text, supers, graphic elements — when do they appear? Are they bold and proactive or generic?`,
       `5. **Product Presentation**: When/how is the product shown? Lifestyle vs. product-focused vs. UGC?`,
-      `6. **CTA Execution**: How does the ad close? What CTA is used and how?`,
+      `6. **CTA Execution**: How does the ad close? What CTA is used and how? Is it direct and urgent?`,
       `7. **Target Audience Signals**: Who is this for? Visual/copy cues indicating target demo?`,
-      `8. **Emotional Triggers**: Fear, aspiration, social proof, urgency?`,
+      `8. **Emotional Triggers**: Fear, aspiration, social proof, urgency? How exaggerated are the stakes?`,
       `9. **Format & Style**: UGC, studio, motion graphics, testimonial, problem-solution?`,
-      `10. **What's Working**: What makes this effective? What creative choices could be adapted?`,
+      `10. **Copy Proactiveness**: Is the messaging direct and commanding, or passive and safe? Rate: Bold / Moderate / Tame.`,
+      `11. **What's Working**: What makes this effective? What creative choices could be adapted?`,
     ].join("\n"),
   });
 
