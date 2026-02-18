@@ -13,6 +13,10 @@ import { TranscriptionService } from "./services/transcription.js";
 import { conceptSessions } from "./services/concept-session.js";
 import { brandStore } from "./services/brand-store.js";
 import {
+  renderCreativeGuidelines,
+  renderTeardownGuidelines,
+} from "./services/creative-guidelines.js";
+import {
   processBatch,
   type VideoSource,
   type BatchItemResult,
@@ -226,7 +230,10 @@ format/structure) and rank the available messaging angles by how well they could
 ${client_brand}. For each recommended angle, explain:
 1. Why this angle aligns with what's working in the reference ad
 2. Which specific hooks would work best
-3. How to adapt the reference ad's approach for ${client_brand}'s voice`;
+3. How to adapt the reference ad's approach for ${client_brand}'s voice
+4. Which Schwartz Awareness Ladder stage the reference ad targets and how the angle should match
+
+${renderCreativeGuidelines()}`;
 
     return {
       content: [
@@ -426,11 +433,7 @@ ${key_benefits.length ? `### Key Benefits\n${key_benefits.map((b) => `- ${b}`).j
 - Available CTAs: ${cta_options.join(", ")}
 - Each variation needs: **Headline** (≤40 chars), **Primary Text** (≤125 chars for optimal, up to 500), **Description** (≤30 chars), **CTA**
 
-### Creative Best Practices
-- **Hook MUST be scroll-stopping** — shock-provoking, exaggerated, pattern-interrupting. The first line should make someone stop mid-scroll.
-- **Be proactive, not passive** — speak directly, use commands, create urgency. "You're wasting money on X" beats "Many people find X challenging."
-- **Exaggerate the stakes** — amplify the problem and the transformation. Make the before/after feel dramatic.
-- **No boring intros** — never start with the brand name or a generic greeting. Lead with the most provocative claim.
+${renderCreativeGuidelines()}
 
 ### Instructions for Claude
 Write ${num_variations} distinct ad copy variations for ${brand}. Each variation should:
@@ -439,7 +442,8 @@ Write ${num_variations} distinct ad copy variations for ${brand}. Each variation
 3. Include a clear value proposition tied to the angle
 4. Use the brand voice guidelines
 5. Keep the tone proactive and direct — no hedging, no passive voice
-6. Format each variation as:
+6. Apply the reference frameworks above (Schwartz Awareness Ladder, Hopkins specificity, StoryBrand, etc.)
+7. Format each variation as:
    - **Variation Name** (descriptive label like "Shock Hook" or "Exaggerated Problem-Solution")
    - **Headline**: ...
    - **Primary Text**: ...
@@ -901,11 +905,7 @@ Returns a session_id and structured brief for Claude to generate the first conce
       ``,
       `Based on the video analysis, propose a creative concept for ${brand} that adapts what's working in the reference video.`,
       ``,
-      `**CREATIVE BEST PRACTICES — apply to every concept:**`,
-      `- The hook MUST be scroll-stopping — shock-provoking, exaggerated, pattern-interrupting`,
-      `- Copy must be proactive and direct — commands, urgency, bold claims. No passive voice, no hedging.`,
-      `- Exaggerate the stakes — make the problem feel unbearable and the transformation dramatic`,
-      `- No boring intros — never lead with the brand name or a generic greeting`,
+      renderCreativeGuidelines(),
       ``,
       `Deliver the concept in this structure:`,
       ``,
@@ -1717,6 +1717,8 @@ async function analyzeVideoCore(
       `9. **Format & Style**: UGC, studio, motion graphics, testimonial, problem-solution?`,
       `10. **Copy Proactiveness**: Is the messaging direct and commanding, or passive and safe? Rate: Bold / Moderate / Tame.`,
       `11. **What's Working**: What makes this effective? What creative choices could be adapted?`,
+      ``,
+      renderTeardownGuidelines(),
     ].join("\n"),
   });
 
