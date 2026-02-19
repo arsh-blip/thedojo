@@ -570,7 +570,76 @@ or seeing the current state of a concept deck before updating it.`,
   }
 );
 
-// ── Tool 7: Analyze Video Ads ────────────────────────────────────────
+// ── Tool 7: Transcribe Video ──────────────────────────────────────────
+
+server.tool(
+  "transcribe_video",
+  `Transcribe the audio from a single video file using OpenAI Whisper.
+Returns the full transcript as plain text. This is a lightweight alternative to
+analyze_video_ads when you only need the transcript from one video — no frames,
+metadata, or cataloging overhead.
+
+Requires ffmpeg to be installed on the system.`,
+  {
+    file_path: z
+      .string()
+      .describe(
+        "Absolute path to the video file (mp4, mov, avi, webm, mkv, m4v)"
+      ),
+  },
+  async ({ file_path: filePath }) => {
+    const analyzer = getVideoAnalyzerService();
+
+    // Validate extension
+    const ext = path.extname(filePath).toLowerCase();
+    const supported = [".mp4", ".mov", ".avi", ".webm", ".mkv", ".m4v"];
+    if (!supported.includes(ext)) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Unsupported file type "${ext}". Supported formats: ${supported.join(", ")}`,
+          },
+        ],
+      };
+    }
+
+    try {
+      const transcript = await analyzer.transcribeVideo(filePath);
+
+      if (!transcript) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `No speech detected in "${path.basename(filePath)}". The video may have no audio track or contain only music/silence.`,
+            },
+          ],
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `## Transcript: ${path.basename(filePath)}\n\n${transcript}`,
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Error transcribing "${path.basename(filePath)}": ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// ── Tool 8: Analyze Video Ads ────────────────────────────────────────
 
 server.tool(
   "analyze_video_ads",
@@ -751,7 +820,7 @@ Supports incremental processing — already-analyzed videos are skipped by defau
   }
 );
 
-// ── Tool 8: Query Ad Catalog ────────────────────────────────────────
+// ── Tool 9: Query Ad Catalog ────────────────────────────────────────
 
 server.tool(
   "query_ad_catalog",

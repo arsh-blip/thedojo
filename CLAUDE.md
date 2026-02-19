@@ -33,7 +33,7 @@ Add to your Claude settings (`~/.claude/settings.json` or project `.mcp.json`):
 
 ### System Requirements
 
-- **ffmpeg** and **ffprobe** must be installed for video ad analysis (`analyze_video_ads`)
+- **ffmpeg** and **ffprobe** must be installed for video ad analysis (`analyze_video_ads`, `transcribe_video`)
 
 ## Creative Strategist Workflow
 
@@ -67,6 +67,13 @@ Use `list_slides` to see all slides in a presentation before updating.
 
 For brands with existing winning video ads, use this workflow to catalog and analyze them
 before building new concepts.
+
+### Quick: Transcribe a Single Video
+Use `transcribe_video` with a file path to get just the transcript from one video — no frames,
+metadata, or cataloging. Great for a quick look at what a video says before deciding whether
+to run the full analysis.
+
+Example: "Transcribe the video at /path/to/ad-video.mp4"
 
 ### Step 1: Analyze Video Ads
 Use `analyze_video_ads` with the folder path containing your video files and the brand name.
@@ -106,5 +113,6 @@ to create new concepts grounded in what's already proven to work.
 | `write_ad_copy` | Generate ad copy variations |
 | `update_concept_slides` | Update Google Slides with concept |
 | `list_slides` | List slides in a presentation |
+| `transcribe_video` | Transcribe audio from a single video file using Whisper |
 | `analyze_video_ads` | Bulk-analyze a folder of video ads (frames, metadata, transcripts) |
 | `query_ad_catalog` | Search and filter the analyzed video ad catalog |
