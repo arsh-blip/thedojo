@@ -2,3 +2,12 @@ node_modules/
 dist/
 .env
 .mcp.json
+.claude/
+brand-assets/
+transcripts/
+*.mp4
+*.mov
+*.MOV
+*.MP4
+*.wav
+*.mp3
