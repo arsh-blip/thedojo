@@ -11,3 +11,10 @@ transcripts/
 *.MP4
 *.wav
 *.mp3
+
+# Next.js
+.next/
+out/
+
+# Uploads
+/tmp/uploads/
