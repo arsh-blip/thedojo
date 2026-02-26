@@ -24,6 +24,24 @@ export interface Bin {
   totalDuration: number;
 }
 
+/** Map API response shape to the component's expected shape */
+export function mapApiBins(raw: unknown[]): Bin[] {
+  return (raw || []).map((b: any) => {
+    const clips: BinClip[] = (b.selects || b.clips || []).map((s: any) => ({
+      file: s.file ?? s.sourceFileName ?? "",
+      start: s.start ?? s.timeRange?.inSeconds ?? 0,
+      end: s.end ?? s.timeRange?.outSeconds ?? 0,
+      duration: s.duration ?? s.durationSeconds ?? 0,
+      description: s.description ?? "",
+    }));
+    return {
+      sceneType: b.sceneType ?? b.name ?? "",
+      clips,
+      totalDuration: b.totalDuration ?? clips.reduce((sum: number, c: BinClip) => sum + c.duration, 0),
+    };
+  });
+}
+
 interface BinsViewerProps {
   bins: Bin[];
 }

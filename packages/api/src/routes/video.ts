@@ -6,7 +6,9 @@ import { jobManager } from "../lib/job-manager.js";
 import {
   getVideoService,
   getPremiereService,
+  getDriveService,
 } from "../lib/service-factory.js";
+import * as store from "../lib/library-store.js";
 import type { VideoAnalysisResult } from "@thedojo/services";
 
 const router = Router();
@@ -27,7 +29,7 @@ router.post("/upload", upload.array("files", 200), (req, res) => {
 
 // Start batch analysis
 router.post("/batch", async (req, res) => {
-  const { uploadId, brandContext, frameDetail } = req.body;
+  const { uploadId, brandContext, brandSlug, frameDetail } = req.body;
   const uploadDir = `/tmp/uploads/${uploadId}`;
 
   if (!uploadId || !fs.existsSync(uploadDir)) {
@@ -35,9 +37,25 @@ router.post("/batch", async (req, res) => {
     return;
   }
 
+  // Resolve brand context: explicit brandContext takes priority,
+  // otherwise auto-fetch from linked messaging doc
+  let resolvedBrandContext = brandContext;
+  if (!resolvedBrandContext && brandSlug) {
+    const brand = store.getBrand(brandSlug);
+    if (brand?.messagingDocId) {
+      try {
+        const driveService = getDriveService();
+        resolvedBrandContext = await driveService.getDocumentContent(brand.messagingDocId);
+      } catch (err) {
+        console.error(`Failed to fetch messaging doc for ${brandSlug}:`, err);
+      }
+    }
+  }
+
   const job = jobManager.createJob("batch_analysis", {
     uploadId,
-    brandContext,
+    brandContext: resolvedBrandContext,
+    brandSlug,
     frameDetail,
   });
 
@@ -45,7 +63,7 @@ router.post("/batch", async (req, res) => {
   res.json({ jobId: job.id });
 
   // Run analysis in background
-  runBatchAnalysis(job.id, uploadDir, brandContext).catch((err) => {
+  runBatchAnalysis(job.id, uploadDir, resolvedBrandContext).catch((err) => {
     jobManager.updateJob(job.id, {
       status: "failed",
       error: err.message,
@@ -154,8 +172,9 @@ router.post("/export/premiere", async (req, res, next) => {
     const service = getPremiereService();
     const outputPath = `/tmp/video-analysis/export_${Date.now()}.xml`;
 
+    const resolvedPath = resolveAnalysisPath(analysisPath);
     const exportData = await service.generatePremiereProject(
-      analysisPath,
+      resolvedPath,
       outputPath,
       {
         projectName: projectName || "AI Rough Cut",
@@ -191,7 +210,8 @@ router.post("/export/premiere", async (req, res, next) => {
 router.post("/export/csv", async (req, res, next) => {
   try {
     const { analysisPath } = req.body;
-    const raw = fs.readFileSync(analysisPath, "utf-8");
+    const resolvedPath = resolveAnalysisPath(analysisPath);
+    const raw = fs.readFileSync(resolvedPath, "utf-8");
     const data = JSON.parse(raw);
     const rows = data.creativeStrategy || [];
 
@@ -224,6 +244,29 @@ router.post("/export/csv", async (req, res, next) => {
   }
 });
 
+// Get full batch summary (creative strategy + per-video analysis data)
+router.post("/batch-summary", async (req, res, next) => {
+  try {
+    const { analysisPath } = req.body;
+    const resolvedPath = resolveAnalysisPath(analysisPath);
+    const raw = fs.readFileSync(resolvedPath, "utf-8");
+    const data = JSON.parse(raw);
+    res.json({
+      creativeStrategy: data.creativeStrategy || [],
+      videoAnalyses: (data.videoAnalyses || []).map((v: any) => ({
+        metadata: v.metadata,
+        frameCount: v.frameAnalyses?.length || 0,
+        transcript: v.transcript || "",
+        narrativeStructure: v.narrativeStructure || null,
+        frameAnalyses: v.frameAnalyses || [],
+      })),
+      stats: data.stats || null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // List narrative templates
 router.get("/templates", (_req, res) => {
   const service = getPremiereService();
@@ -248,6 +291,17 @@ async function runBatchAnalysis(
   const errors: string[] = [];
   let totalFrames = 0;
 
+  // Load drive manifest if it exists (maps relativePath → Drive metadata)
+  let driveManifest: Record<string, { driveFileId: string; driveWebViewLink?: string }> = {};
+  const manifestPath = path.join(folderPath, "drive-manifest.json");
+  if (fs.existsSync(manifestPath)) {
+    try {
+      driveManifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+    } catch {
+      // Ignore malformed manifest
+    }
+  }
+
   for (let i = 0; i < videoFiles.length; i++) {
     const file = videoFiles[i];
     const elapsed = Date.now() - startTime;
@@ -267,6 +321,15 @@ async function runBatchAnalysis(
 
     try {
       const result = await videoService.analyzeVideo(file);
+
+      // Inject Drive metadata if available
+      const relativePath = path.relative(folderPath, file);
+      const driveInfo = driveManifest[relativePath];
+      if (driveInfo) {
+        result.metadata.driveFileId = driveInfo.driveFileId;
+        result.metadata.driveWebViewLink = driveInfo.driveWebViewLink;
+      }
+
       analyses.push(result);
       totalFrames += result.frameAnalyses.length;
     } catch (err: any) {
@@ -335,8 +398,30 @@ async function discoverVideos(folderPath: string): Promise<string[]> {
   return results.sort();
 }
 
-function loadAnalyses(analysisPath: string): VideoAnalysisResult[] {
-  const raw = fs.readFileSync(analysisPath, "utf-8");
+function resolveAnalysisPath(analysisPathOrJobId: string): string {
+  // If it looks like a file path and exists, use it directly
+  if (analysisPathOrJobId.startsWith("/") && fs.existsSync(analysisPathOrJobId)) {
+    return analysisPathOrJobId;
+  }
+  // Otherwise treat it as a job ID and resolve from the job's result
+  const job = jobManager.getJob(analysisPathOrJobId);
+  if (job?.result) {
+    const resultPath = (job.result as any).resultPath;
+    if (resultPath && fs.existsSync(resultPath)) {
+      return resultPath;
+    }
+  }
+  // Last resort: try the conventional path
+  const conventionalPath = `/tmp/video-analysis/batch_${analysisPathOrJobId}.json`;
+  if (fs.existsSync(conventionalPath)) {
+    return conventionalPath;
+  }
+  throw new Error(`Analysis results not found for: ${analysisPathOrJobId}`);
+}
+
+function loadAnalyses(analysisPathOrJobId: string): VideoAnalysisResult[] {
+  const filePath = resolveAnalysisPath(analysisPathOrJobId);
+  const raw = fs.readFileSync(filePath, "utf-8");
   const batch = JSON.parse(raw);
   return batch.videoAnalyses || batch;
 }

@@ -7,12 +7,14 @@ import {
   Film,
   FolderOpen,
   LayoutDashboard,
+  Library,
   Presentation,
 } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/video", label: "Video Analysis", icon: Film },
+  { href: "/library", label: "Clip Library", icon: Library },
   { href: "/drive", label: "Drive", icon: FolderOpen },
   { href: "/concept", label: "Concepts", icon: Presentation },
 ];

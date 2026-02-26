@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { drive } from "@/lib/api-client";
 import { Header } from "@/components/layout/header";
 import { FolderTree } from "@/components/drive/folder-tree";
@@ -10,11 +11,14 @@ import { CreateDialog } from "@/components/drive/create-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { toast } from "sonner";
 import {
   ChevronRight,
   FolderOpen,
   Plus,
   Search,
+  Video,
+  Loader2,
 } from "lucide-react";
 
 interface BreadcrumbEntry {
@@ -23,6 +27,7 @@ interface BreadcrumbEntry {
 }
 
 export default function DrivePage() {
+  const router = useRouter();
   const [currentFolderId, setCurrentFolderId] = useState<string>("");
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbEntry[]>([
     { id: "", name: "My Drive" },
@@ -30,6 +35,7 @@ export default function DrivePage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearch, setActiveSearch] = useState("");
+  const [pullingVideos, setPullingVideos] = useState(false);
 
   const {
     data: folderData,
@@ -90,16 +96,49 @@ export default function DrivePage() {
     setActiveSearch("");
   }, []);
 
+  const handlePullVideos = useCallback(async () => {
+    if (!currentFolderId) {
+      toast.error("Navigate into a folder first to pull videos from it");
+      return;
+    }
+    setPullingVideos(true);
+    try {
+      const folderName = breadcrumbs[breadcrumbs.length - 1]?.name || "folder";
+      toast.info(`Scanning "${folderName}" for videos...`);
+      const { jobId, uploadId } = await drive.pullVideos(currentFolderId);
+      toast.success("Download started! Redirecting to Video Analysis...");
+      router.push(`/video?pullJobId=${jobId}&uploadId=${uploadId}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to pull videos");
+    } finally {
+      setPullingVideos(false);
+    }
+  }, [currentFolderId, breadcrumbs, router]);
+
   return (
     <>
       <Header
         title="Drive"
         description="Browse client folders and files"
         actions={
-          <Button onClick={() => setCreateDialogOpen(true)}>
-            <Plus className="h-4 w-4" />
-            Create
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="default"
+              onClick={handlePullVideos}
+              disabled={!currentFolderId || pullingVideos}
+            >
+              {pullingVideos ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Video className="h-4 w-4" />
+              )}
+              Pull Videos for Analysis
+            </Button>
+            <Button variant="outline" onClick={() => setCreateDialogOpen(true)}>
+              <Plus className="h-4 w-4" />
+              Create
+            </Button>
+          </div>
         }
       />
 

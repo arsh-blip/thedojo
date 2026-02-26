@@ -93,11 +93,7 @@ export default function Dashboard() {
               {recentJobs.slice(0, 10).map((job) => (
                 <Link
                   key={job.id}
-                  href={
-                    job.type === "batch_analysis"
-                      ? `/video/${job.id}`
-                      : `/video`
-                  }
+                  href={`/video/${job.id}`}
                 >
                   <Card className="hover:border-primary/30 transition-colors cursor-pointer">
                     <CardContent className="flex items-center justify-between py-3">

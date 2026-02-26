@@ -64,6 +64,12 @@ export const drive = {
       method: "POST",
       body: JSON.stringify({ name, folderId, templateId }),
     }),
+
+  pullVideos: (folderId: string) =>
+    request<{ jobId: string; uploadId: string }>("/api/drive/pull-videos", {
+      method: "POST",
+      body: JSON.stringify({ folderId }),
+    }),
 };
 
 // ── Slides ─────────────────────────────────────────────────────────────
@@ -95,6 +101,62 @@ export interface BatchStartResult {
   jobId: string;
 }
 
+export interface CreativeStrategyRow {
+  namingConvention: string;
+  priority: number;
+  persona: string;
+  angle: string;
+  subAngles: string;
+  primaryBenefits: string;
+  description: string;
+  emotionalFear: string;
+  problemSolutionPromise: string;
+  beforeAfterFrameworks: string;
+  exampleHeadline: string;
+  exampleTestimonial: string;
+  exampleUGCHook: string;
+  keyPointsFraming: string;
+  objections: string;
+}
+
+export interface VideoAnalysisSummary {
+  metadata: {
+    filePath: string;
+    fileName: string;
+    durationSeconds: number;
+    width: number;
+    height: number;
+    codec: string;
+    fileSize: number;
+    videoType: string;
+  };
+  frameCount: number;
+  transcript: string;
+  narrativeStructure: {
+    hookTimestamp: number | null;
+    bodyTimestamp: number | null;
+    ctaTimestamp: number | null;
+    totalScenes: number;
+  } | null;
+  frameAnalyses: {
+    timestampSeconds: number;
+    sceneType: string;
+    description: string;
+    onScreenText: string[];
+    people: string;
+    products: string[];
+  }[];
+}
+
+export interface BatchStats {
+  totalVideos: number;
+  successCount: number;
+  errorCount: number;
+  totalFramesAnalyzed: number;
+  estimatedCost: number;
+  processingTimeMs: number;
+}
+
 export const video = {
   upload: async (files: File[]): Promise<UploadResult> => {
     const formData = new FormData();
@@ -110,10 +172,10 @@ export const video = {
     return res.json();
   },
 
-  startBatch: (uploadId: string, brandContext?: string, frameDetail?: string) =>
+  startBatch: (uploadId: string, brandContext?: string, brandSlug?: string, frameDetail?: string) =>
     request<BatchStartResult>("/api/video/batch", {
       method: "POST",
-      body: JSON.stringify({ uploadId, brandContext, frameDetail }),
+      body: JSON.stringify({ uploadId, brandContext, brandSlug, frameDetail }),
     }),
 
   getBatchResults: (jobId: string) =>
@@ -158,6 +220,99 @@ export const video = {
   },
 
   getTemplates: () => request("/api/video/templates"),
+
+  getBatchSummary: (analysisPath: string) =>
+    request<{
+      creativeStrategy: CreativeStrategyRow[];
+      videoAnalyses: VideoAnalysisSummary[];
+      stats: BatchStats | null;
+    }>("/api/video/batch-summary", {
+      method: "POST",
+      body: JSON.stringify({ analysisPath }),
+    }),
+};
+
+// ── Library ───────────────────────────────────────────────────────────
+
+export interface BrandMeta {
+  slug: string;
+  name: string;
+  createdAt: string;
+  analysisCount: number;
+  messagingDocId?: string;
+  messagingDocName?: string;
+}
+
+export interface AnalysisSummary {
+  id: string;
+  savedAt: string;
+  jobId: string;
+  videoCount: number;
+  clipCount: number;
+  brandContext?: string;
+}
+
+export interface LibraryClip {
+  id: string;
+  analysisId: string;
+  sourceFileName: string;
+  sourceVideoPath: string;
+  timeRange: { inSeconds: number; outSeconds: number };
+  durationSeconds: number;
+  sceneType: string;
+  score: number;
+  scoreRationale: string;
+  description: string;
+  transcript: string;
+  onScreenText: string[];
+  people: string;
+  products: string[];
+  tags: string[];
+  driveFileId?: string;
+  driveWebViewLink?: string;
+}
+
+export const library = {
+  listBrands: () => request<BrandMeta[]>("/api/library/brands"),
+
+  createBrand: (name: string) =>
+    request<BrandMeta>("/api/library/brands", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+
+  getBrand: (slug: string) =>
+    request<BrandMeta>(`/api/library/brands/${slug}`),
+
+  deleteBrand: (slug: string) =>
+    request(`/api/library/brands/${slug}`, { method: "DELETE" }),
+
+  updateBrand: (slug: string, updates: { messagingDocId?: string | null; messagingDocName?: string | null }) =>
+    request<BrandMeta>(`/api/library/brands/${slug}`, {
+      method: "PATCH",
+      body: JSON.stringify(updates),
+    }),
+
+  getMessagingDocContent: (slug: string) =>
+    request<{ fileId: string; fileName: string; content: string }>(
+      `/api/library/brands/${slug}/messaging-doc-content`
+    ),
+
+  listAnalyses: (brandSlug: string) =>
+    request<AnalysisSummary[]>(`/api/library/brands/${brandSlug}/analyses`),
+
+  saveAnalysis: (brandSlug: string, jobId: string, brandContext?: string) =>
+    request<AnalysisSummary>(`/api/library/brands/${brandSlug}/analyses`, {
+      method: "POST",
+      body: JSON.stringify({ jobId, brandContext }),
+    }),
+
+  searchClips: (brandSlug: string, params?: Record<string, string>) => {
+    const qs = params ? new URLSearchParams(params).toString() : "";
+    return request<LibraryClip[]>(
+      `/api/library/brands/${brandSlug}/clips${qs ? `?${qs}` : ""}`
+    );
+  },
 };
 
 // ── Jobs ───────────────────────────────────────────────────────────────

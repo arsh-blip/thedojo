@@ -1,23 +1,19 @@
 node_modules/
+packages/*/node_modules/
+.next/
 dist/
+packages/*/dist/
 .env
+.env.*
 .mcp.json
 .claude/
+.git/
 brand-assets/
 transcripts/
+data/
 *.mp4
 *.mov
 *.MOV
 *.MP4
 *.wav
 *.mp3
-
-# Next.js
-.next/
-out/
-
-# Uploads
-/tmp/uploads/
-
-# Library data
-data/

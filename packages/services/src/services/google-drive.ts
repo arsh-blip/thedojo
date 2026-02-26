@@ -1,6 +1,8 @@
 import { google } from "googleapis";
 import type { OAuth2Client } from "google-auth-library";
 import type { MessagingDocument } from "../types.js";
+import fs from "node:fs";
+import path from "node:path";
 
 export interface DriveItem {
   id: string;
@@ -271,6 +273,107 @@ export class GoogleDriveService {
       isFolder: false,
       webViewLink: f.webViewLink || undefined,
     };
+  }
+
+  // ── File Download ───────────────────────────────────────────────
+
+  /**
+   * Get file size in bytes (returns 0 if unknown, e.g. Google Docs).
+   */
+  async getFileSize(fileId: string): Promise<number> {
+    try {
+      const res = await this.drive.files.get({
+        fileId,
+        fields: "size",
+        supportsAllDrives: true,
+      });
+      return parseInt(res.data.size || "0", 10) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async downloadFile(
+    fileId: string,
+    destPath: string,
+    options?: {
+      /** Timeout in ms for no-data received (default 5 min) */
+      stallTimeout?: number;
+      /** Called periodically with bytes downloaded so far */
+      onProgress?: (bytesDownloaded: number) => void;
+    }
+  ): Promise<void> {
+    const stallTimeout = options?.stallTimeout ?? 5 * 60 * 1000;
+
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    const response = await this.drive.files.get(
+      { fileId, alt: "media", supportsAllDrives: true },
+      { responseType: "stream" }
+    );
+    return new Promise((resolve, reject) => {
+      const dest = fs.createWriteStream(destPath);
+      const stream = response.data as import("stream").Readable;
+      let bytesDownloaded = 0;
+      let settled = false;
+
+      // Stall timer — resets every time data arrives
+      let stallTimer: ReturnType<typeof setTimeout> | null = null;
+      const resetStallTimer = () => {
+        if (stallTimer) clearTimeout(stallTimer);
+        stallTimer = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            stream.destroy();
+            dest.destroy();
+            reject(new Error(`Download stalled — no data received for ${stallTimeout / 1000}s`));
+          }
+        }, stallTimeout);
+      };
+      resetStallTimer();
+
+      stream.on("data", (chunk: Buffer) => {
+        bytesDownloaded += chunk.length;
+        resetStallTimer();
+        options?.onProgress?.(bytesDownloaded);
+      });
+
+      stream.pipe(dest);
+
+      dest.on("finish", () => {
+        if (stallTimer) clearTimeout(stallTimer);
+        if (!settled) { settled = true; resolve(); }
+      });
+      dest.on("error", (err) => {
+        if (stallTimer) clearTimeout(stallTimer);
+        if (!settled) { settled = true; reject(err); }
+      });
+      stream.on("error", (err) => {
+        if (stallTimer) clearTimeout(stallTimer);
+        if (!settled) { settled = true; reject(err); }
+      });
+    });
+  }
+
+  // ── Recursive Folder Listing ──────────────────────────────────
+
+  async listFolderRecursive(
+    folderId: string,
+    basePath = ""
+  ): Promise<(DriveItem & { relativePath: string })[]> {
+    const items = await this.listFolder(folderId);
+    const results: (DriveItem & { relativePath: string })[] = [];
+
+    for (const item of items) {
+      const itemPath = basePath ? `${basePath}/${item.name}` : item.name;
+      if (item.isFolder) {
+        const subItems = await this.listFolderRecursive(item.id, itemPath);
+        results.push(...subItems);
+      } else {
+        results.push({ ...item, relativePath: itemPath });
+      }
+    }
+
+    return results;
   }
 
   // ── Search ───────────────────────────────────────────────────────

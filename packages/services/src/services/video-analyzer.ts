@@ -13,7 +13,9 @@ import type {
 } from "../types.js";
 
 const execFileAsync = promisify(execFile);
-const FFMPEG_PATH = "/tmp/ffmpeg";
+function getFFmpegPath() {
+  return process.env.FFMPEG_PATH || "ffmpeg";
+}
 const TEMP_DIR = "/tmp/video-analysis";
 
 const FRAME_ANALYSIS_PROMPT = `You are a creative strategist analyzing frames from video advertisements for a performance marketing agency.
@@ -121,7 +123,7 @@ export class VideoAnalyzerService {
 
   async getVideoMetadata(filePath: string): Promise<VideoMetadata> {
     // ffmpeg -i always exits with error since no output specified, so we catch it
-    const { stderr } = await execFileAsync(FFMPEG_PATH, ["-i", filePath], {
+    const { stderr } = await execFileAsync(getFFmpegPath(), ["-i", filePath], {
       timeout: 30000,
     }).catch((err) => ({ stderr: (err as any).stderr as string, stdout: "" }));
 
@@ -212,7 +214,7 @@ export class VideoAnalyzerService {
 
       try {
         await execFileAsync(
-          FFMPEG_PATH,
+          getFFmpegPath(),
           [
             "-ss",
             ts.toString(),
@@ -300,7 +302,7 @@ export class VideoAnalyzerService {
 
     try {
       await execFileAsync(
-        FFMPEG_PATH,
+        getFFmpegPath(),
         [
           "-i",
           filePath,
@@ -579,7 +581,7 @@ export class VideoAnalyzerService {
   ): Promise<number[]> {
     try {
       const { stderr } = await execFileAsync(
-        FFMPEG_PATH,
+        getFFmpegPath(),
         [
           "-i",
           filePath,

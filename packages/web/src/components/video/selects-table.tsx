@@ -32,6 +32,19 @@ export interface VideoSelect {
   description: string;
 }
 
+/** Map API response shape to the component's expected shape */
+export function mapApiSelects(raw: unknown[]): VideoSelect[] {
+  return (raw || []).map((r: any) => ({
+    file: r.file ?? r.sourceFileName ?? "",
+    sceneType: r.sceneType ?? "",
+    start: r.start ?? r.timeRange?.inSeconds ?? 0,
+    end: r.end ?? r.timeRange?.outSeconds ?? 0,
+    duration: r.duration ?? r.durationSeconds ?? 0,
+    score: r.score ?? 0,
+    description: r.description ?? "",
+  }));
+}
+
 interface SelectsTableProps {
   selects: VideoSelect[];
 }

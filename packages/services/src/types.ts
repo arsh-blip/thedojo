@@ -98,6 +98,8 @@ export interface VideoMetadata {
   fileSize: number;
   videoType: "finished_ad" | "raw_clip";
   folderContext: string;
+  driveFileId?: string;
+  driveWebViewLink?: string;
 }
 
 export interface ExtractedFrame {
@@ -185,6 +187,8 @@ export interface Select {
   people: string;
   products: string[];
   tags: string[];
+  driveFileId?: string;
+  driveWebViewLink?: string;
 }
 
 export interface Bin {

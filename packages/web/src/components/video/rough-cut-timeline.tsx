@@ -11,6 +11,21 @@ export interface TimelineSegment {
   duration: number;
 }
 
+/** Map API response shape to the component's expected shape */
+export function mapApiRoughCut(raw: unknown): TimelineSegment[] {
+  if (!raw) return [];
+  // API returns { clips: [...], fps, name, ... } — the clips array has timeline data
+  const data = raw as any;
+  const clips = data.clips || (Array.isArray(data) ? data : []);
+  return clips.map((c: any) => {
+    const start = c.start ?? c.timelineInSeconds ?? 0;
+    const end = c.end ?? c.timelineOutSeconds ?? 0;
+    const duration = c.duration ?? (end - start);
+    const narrativeType = c.narrativeType ?? c.select?.sceneType ?? c.sceneType ?? "unknown";
+    return { narrativeType, start, end, duration };
+  });
+}
+
 interface RoughCutTimelineProps {
   segments: TimelineSegment[];
 }

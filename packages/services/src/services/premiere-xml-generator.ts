@@ -117,6 +117,8 @@ export class PremiereXmlGeneratorService {
           people: frame.people,
           products: frame.products,
           tags: this.generateTags(frame, metadata),
+          ...(metadata.driveFileId && { driveFileId: metadata.driveFileId }),
+          ...(metadata.driveWebViewLink && { driveWebViewLink: metadata.driveWebViewLink }),
         });
       }
 
