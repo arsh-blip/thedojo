@@ -16,9 +16,6 @@ RUN npm run build -w packages/services && \
     npm run build -w packages/api && \
     npm run build -w packages/web
 
-# Prune dev dependencies after build
-RUN npm prune --omit=dev
-
 # Copy entrypoint
 COPY start.sh ./start.sh
 RUN chmod +x ./start.sh
