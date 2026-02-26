@@ -44,10 +44,14 @@ RUN npm ci --omit=dev
 # Copy built artifacts from build stage
 COPY --from=build /app/packages/services/dist ./packages/services/dist
 COPY --from=build /app/packages/api/dist ./packages/api/dist
+
+# Next.js needs the full web package structure at runtime
 COPY --from=build /app/packages/web/.next ./packages/web/.next
 COPY --from=build /app/packages/web/public ./packages/web/public
 COPY --from=build /app/packages/web/next.config.ts ./packages/web/next.config.ts
+COPY --from=build /app/packages/web/tsconfig.json ./packages/web/tsconfig.json
 COPY --from=build /app/packages/web/package.json ./packages/web/package.json
+COPY --from=build /app/packages/web/src/proxy.ts ./packages/web/src/proxy.ts
 
 # Copy entrypoint
 COPY start.sh ./start.sh

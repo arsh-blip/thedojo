@@ -1,6 +1,8 @@
 #!/bin/sh
 set -e
 
+echo "=== The Dojo startup ==="
+
 # Ensure persistent data directories exist
 mkdir -p /data/brands /data/uploads /data/video-analysis
 
@@ -10,24 +12,33 @@ ln -sfn /data/video-analysis /tmp/video-analysis
 mkdir -p /app/data
 ln -sfn /data/brands /app/data/brands
 
+echo "Data directories ready"
+
 # Start the API server in the background with auto-restart
 (while true; do
-  echo "Starting API server..."
-  node /app/packages/api/dist/index.js || true
-  echo "API process exited, restarting in 2s..."
+  echo "[API] Starting on port 3001..."
+  node /app/packages/api/dist/index.js 2>&1 || true
+  echo "[API] Process exited, restarting in 2s..."
   sleep 2
 done) &
 
-# Wait for API to be ready
-echo "Waiting for API server..."
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+# Wait for API to be ready (up to 30s)
+echo "[API] Waiting for health check..."
+API_READY=0
+for i in $(seq 1 30); do
   if node -e "fetch('http://localhost:3001/api/health').then(r=>{if(r.ok)process.exit(0);process.exit(1)}).catch(()=>process.exit(1))" 2>/dev/null; then
-    echo "API server ready"
+    echo "[API] Ready after ${i}s"
+    API_READY=1
     break
   fi
   sleep 1
 done
 
-# Start Next.js in the foreground (Railway injects PORT)
+if [ "$API_READY" = "0" ]; then
+  echo "[API] WARNING: API not responding after 30s, starting Next.js anyway"
+fi
+
+# Start Next.js in the foreground
+echo "[WEB] Starting Next.js on port ${PORT:-3000}..."
 cd /app/packages/web
-exec npx next start -p ${PORT:-3000}
+exec /app/node_modules/.bin/next start -p ${PORT:-3000} -H 0.0.0.0
