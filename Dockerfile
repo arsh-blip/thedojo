@@ -16,6 +16,10 @@ RUN npm run build -w packages/services && \
     npm run build -w packages/api && \
     npm run build -w packages/web
 
+# Copy static assets into standalone output (required for standalone mode)
+RUN cp -r /app/packages/web/.next/static /app/packages/web/.next/standalone/packages/web/.next/static
+RUN cp -r /app/packages/web/public /app/packages/web/.next/standalone/packages/web/public
+
 # Copy entrypoint
 COPY start.sh ./start.sh
 RUN chmod +x ./start.sh

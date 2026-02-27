@@ -16,13 +16,11 @@ echo "Data directories ready"
 # Start the API server in the background with auto-restart
 (while true; do
   echo "[API] Starting on port 3001..."
-  node /app/packages/api/dist/index.js || true
+  node /app/packages/api/dist/index.js 2>&1 || true
   echo "[API] Process exited, restarting in 2s..."
   sleep 2
 done) &
 
-# Start Next.js in the foreground immediately
-# (No need to wait for API — /api/health is handled by Next.js directly)
-echo "[WEB] Starting Next.js on port ${PORT:-3000}..."
-cd /app/packages/web
-exec /app/node_modules/.bin/next start -p ${PORT:-3000} -H 0.0.0.0
+# Start Next.js standalone server in the foreground
+echo "[WEB] Starting Next.js standalone on port ${PORT:-3000}..."
+HOSTNAME=0.0.0.0 PORT=${PORT:-3000} exec node /app/packages/web/.next/standalone/packages/web/server.js
