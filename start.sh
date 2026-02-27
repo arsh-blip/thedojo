@@ -1,6 +1,8 @@
 #!/bin/sh
 
 echo "=== The Dojo startup ==="
+echo "PORT=$PORT"
+echo "NODE_ENV=$NODE_ENV"
 
 # Ensure persistent data directories exist
 mkdir -p /data/brands /data/uploads /data/video-analysis
@@ -21,6 +23,21 @@ echo "Data directories ready"
   sleep 2
 done) &
 
-# Start Next.js standalone server in the foreground
-echo "[WEB] Starting Next.js standalone on port ${PORT:-3000}..."
-HOSTNAME=0.0.0.0 PORT=${PORT:-3000} exec node /app/packages/web/.next/standalone/packages/web/server.js
+# Verify standalone server exists
+STANDALONE="/app/packages/web/.next/standalone/packages/web/server.js"
+if [ ! -f "$STANDALONE" ]; then
+  echo "[WEB] ERROR: server.js not found at $STANDALONE"
+  echo "[WEB] Listing .next/standalone/:"
+  find /app/packages/web/.next/standalone -name "server.js" 2>&1 || true
+  ls -la /app/packages/web/.next/standalone/ 2>&1 || true
+  exit 1
+fi
+
+echo "[WEB] Found standalone server at $STANDALONE"
+
+# Set env vars explicitly via export (not inline) for reliability
+export HOSTNAME="0.0.0.0"
+export PORT="${PORT:-3000}"
+
+echo "[WEB] Starting Next.js standalone on $HOSTNAME:$PORT..."
+exec node "$STANDALONE"

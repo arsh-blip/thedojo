@@ -20,6 +20,9 @@ RUN npm run build -w packages/services && \
 RUN cp -r /app/packages/web/.next/static /app/packages/web/.next/standalone/packages/web/.next/static
 RUN cp -r /app/packages/web/public /app/packages/web/.next/standalone/packages/web/public
 
+# Debug: verify standalone server.js exists at build time
+RUN ls -la /app/packages/web/.next/standalone/packages/web/server.js
+
 # Copy entrypoint
 COPY start.sh ./start.sh
 RUN chmod +x ./start.sh
@@ -29,6 +32,7 @@ RUN mkdir -p /data/brands /data/uploads /data/video-analysis
 
 ENV NODE_ENV=production
 ENV FFMPEG_PATH=ffmpeg
+ENV HOSTNAME=0.0.0.0
 
 EXPOSE 3000
 
